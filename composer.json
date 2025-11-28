@@ -22,6 +22,12 @@
     "symfony/finder": "^7.0"
   },
   "scripts": {
-    "sys": "php artisan system:build --help"
+    "sys": "php artisan system:build --help",
+    "post-install-cmd": [
+      "Arpanmandaviya\\SystemBuilder\\InstallScript::postInstall"
+    ],
+    "post-update-cmd": [
+      "Arpanmandaviya\\SystemBuilder\\InstallScript::postInstall"
+    ]
   }
 }
