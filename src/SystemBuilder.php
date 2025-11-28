@@ -46,10 +46,11 @@ class SystemBuilder
     {
         $line = trim(str_replace('table:', '', $line));
 
+        // Split by first space to get table name and columns
         $parts = explode(' ', $line, 2);
         $tableName = trim($parts[0]);
-
         $columns = [];
+
         if (isset($parts[1])) {
             $colDefs = explode(',', $parts[1]);
             foreach ($colDefs as $c) {
@@ -59,12 +60,12 @@ class SystemBuilder
 
                 foreach ($chunks as $rule) {
                     if (str_starts_with($rule, 'len(')) {
-                        $col['length'] = preg_replace('/[^0-9]/', '', $rule);
-                    } else if ($rule === 'unique') {
+                        $col['length'] = (int)preg_replace('/[^0-9]/', '', $rule);
+                    } elseif ($rule === 'unique') {
                         $col['unique'] = true;
-                    } else if ($rule === 'nullable') {
+                    } elseif ($rule === 'nullable') {
                         $col['nullable'] = true;
-                    } else if (str_starts_with($rule, 'rel(')) {
+                    } elseif (str_starts_with($rule, 'rel(')) {
                         preg_match('/rel\((.*?),(.*?),(.*?)\)/', $rule, $r);
                         $col['foreign'] = [
                             'on' => trim($r[1]),
@@ -79,7 +80,7 @@ class SystemBuilder
             }
         }
 
-        return ['name' => $tableName, 'columns' => $columns];
+        return ['name' => $tableName, 'columns' => $columns, 'timestamps' => true];
     }
 
 
@@ -257,20 +258,32 @@ class SystemBuilder
 
     protected function generateViews(array $table): void
     {
-        $viewPath = $this->viewPath($table['name']);
+        $views = $table['views'] ?? [];
 
-        if (!$this->files->isDirectory($viewPath)) {
-            $this->files->makeDirectory($viewPath, 0755, true);
+        foreach ($views as $v) {
+            // Parse folder and multiple files
+            $line = trim($v);
+            $files = [];
+            preg_match('/(.*?)\/\[(.*?)\]/', $line, $matches);
+            if ($matches) {
+                $baseFolder = trim($matches[1], '/');
+                $files = array_map(fn($f) => trim($f) . '.blade.php', explode(',', $matches[2]));
+            } else {
+                // single file path, maybe like "admin/includes/head"
+                $baseFolder = dirname($line);
+                $files = [basename($line) . '.blade.php'];
+            }
+
+            foreach ($files as $file) {
+                $fullPath = $this->basePath . '/resources/views/' . $baseFolder . '/' . $file;
+                $dir = dirname($fullPath);
+                if (!$this->files->isDirectory($dir)) $this->files->makeDirectory($dir, 0755, true);
+
+                $stub = $this->files->get(__DIR__ . '/../../resources/stubs/view.stub');
+                $this->files->put($fullPath, str_replace('{{tableName}}', $table['name'], $stub));
+                $this->info("   - View created: $fullPath");
+            }
         }
-
-        $stub = $this->files->get(__DIR__ . '/../../resources/stubs/view.stub');
-        $viewFolder = $this->moduleName ? Str::snake($this->moduleName) . '.' . $table['name'] : $table['name'];
-        $content = str_replace('{{tableName}}', $viewFolder, $stub);
-
-        $fileName = "{$viewPath}/index.blade.php";
-        $this->saveFileWithPrompt($fileName, $content);
-
-        $this->info("   - View created: {$fileName}");
     }
 
 
