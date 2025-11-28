@@ -1,6 +1,6 @@
 {
   "name": "arpanmandaviya/laravel-system-builder",
-  "description": "Generate Laravel migrations, models, controllers, and views from a JSON schema (Laravel 12+)",
+  "description": "Generate Laravel migrations, models, controllers, and views from a minimal JSON schema (Laravel 12+)",
   "type": "library",
   "license": "MIT",
   "autoload": {
@@ -18,10 +18,10 @@
   "require": {
     "php": ">=8.1",
     "illuminate/support": "^10.0|^11.0|^12.0",
-    "illuminate/console": "^10.0|^11.0|^12.0"
+    "illuminate/console": "^10.0|^11.0|^12.0",
+    "symfony/finder": "^7.0"
   },
   "scripts": {
-    "sys": "php artisan system:build --help",
-    "system:help": "php artisan system:build --help"
+    "sys": "php artisan system:build --help"
   }
 }
