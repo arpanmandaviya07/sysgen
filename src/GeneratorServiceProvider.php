@@ -14,7 +14,7 @@ class GeneratorServiceProvider extends ServiceProvider
     {
         if ($this->app->runningInConsole()) {
             $this->commands([
-                BuildSystemCommand::class,
+                \Arpanmandaviya\SystemBuilder\Commands\BuildSystemCommand::class,
             ]);
 
 
