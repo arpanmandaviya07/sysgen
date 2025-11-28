@@ -4,20 +4,24 @@ namespace Arpanmandaviya\SystemBuilder\Builders;
 
 use Illuminate\Support\Str;
 use Illuminate\Filesystem\Filesystem;
-use Illuminate\Console\Concerns\InteractsWithIO; // To use $this->info(), $this->error(), etc. in a builder
+use Illuminate\Console\Concerns\InteractsWithIO;
+
+// To use $this->info(), $this->error(), etc. in a builder
 
 class SystemBuilder
 {
-    use InteractsWithIO; // Trait to mimic Command's output methods
+    use InteractsWithIO;
 
-    protected array $definition;
-    protected string $basePath;
+    // Trait to mimic Command's output methods
+
+    protected array      $definition;
+    protected string     $basePath;
     protected Filesystem $files;
-    protected bool $force = false;
-    protected ?string $moduleName = null; // New property for module folder
+    protected bool       $force      = false;
+    protected ?string    $moduleName = null; // New property for module folder
 
-    protected bool $overwriteAll = false;
-    protected bool $skipAll = false;
+    protected bool  $overwriteAll  = false;
+    protected bool  $skipAll       = false;
     protected array $createdTables = [];
 
     // The $output property is required by InteractsWithIO trait
@@ -38,6 +42,47 @@ class SystemBuilder
         $this->output = $output;
     }
 
+    public static function parseTableDefinition(string $line): array
+    {
+        $line = trim(str_replace('table:', '', $line));
+
+        $parts = explode(' ', $line, 2);
+        $tableName = trim($parts[0]);
+
+        $columns = [];
+        if (isset($parts[1])) {
+            $colDefs = explode(',', $parts[1]);
+            foreach ($colDefs as $c) {
+                $chunks = array_map('trim', explode('|', trim($c)));
+                $colName = array_shift($chunks);
+                $col = ['name' => $colName];
+
+                foreach ($chunks as $rule) {
+                    if (str_starts_with($rule, 'len(')) {
+                        $col['length'] = preg_replace('/[^0-9]/', '', $rule);
+                    } else if ($rule === 'unique') {
+                        $col['unique'] = true;
+                    } else if ($rule === 'nullable') {
+                        $col['nullable'] = true;
+                    } else if (str_starts_with($rule, 'rel(')) {
+                        preg_match('/rel\((.*?),(.*?),(.*?)\)/', $rule, $r);
+                        $col['foreign'] = [
+                            'on' => trim($r[1]),
+                            'references' => trim($r[2]),
+                            'onDelete' => trim($r[3]),
+                        ];
+                    } else {
+                        $col['type'] = $rule;
+                    }
+                }
+                $columns[] = $col;
+            }
+        }
+
+        return ['name' => $tableName, 'columns' => $columns];
+    }
+
+
     public function build(): void
     {
         $this->info("Starting build for system: " . ($this->moduleName ?? 'Base System'));
@@ -48,7 +93,12 @@ class SystemBuilder
         }
 
         foreach ($this->definition['tables'] as $table) {
-            $tableName = $table['name'];
+            $tableName = $table['name'] ?? ($table['table'] ?? null);
+
+            if (!$tableName) {
+                throw new \Exception("❌ Table name missing. Fix your definition input.");
+            }
+
             $this->comment("\nProcessing table: {$tableName}...");
 
             try {
@@ -76,6 +126,7 @@ class SystemBuilder
 
     /**
      * Helper method to get namespaced paths based on module.
+     *
      * @param string $suffix
      * @return string
      */
@@ -91,6 +142,7 @@ class SystemBuilder
 
     /**
      * Helper method to get the correct namespace.
+     *
      * @param string $suffix
      * @return string
      */
@@ -206,17 +258,19 @@ class SystemBuilder
     protected function generateViews(array $table): void
     {
         $viewPath = $this->viewPath($table['name']);
-        if (!$this->files->isDirectory($viewPath)) $this->files->makeDirectory($viewPath, 0755, true);
+
+        if (!$this->files->isDirectory($viewPath)) {
+            $this->files->makeDirectory($viewPath, 0755, true);
+        }
 
         $stub = $this->files->get(__DIR__ . '/../../resources/stubs/view.stub');
-
-        // Views use snake_case for the view path and resource routing
         $viewFolder = $this->moduleName ? Str::snake($this->moduleName) . '.' . $table['name'] : $table['name'];
-
         $content = str_replace('{{tableName}}', $viewFolder, $stub);
 
-        $this->saveFileWithPrompt("$viewPath/index.blade.php", $content);
-        $this->info("   - View created: {$viewPath}/index.blade.php");
+        $fileName = "{$viewPath}/index.blade.php";
+        $this->saveFileWithPrompt($fileName, $content);
+
+        $this->info("   - View created: {$fileName}");
     }
 
 
@@ -286,6 +340,24 @@ class SystemBuilder
         }
 
         return $lines;
+    }
+
+    protected function parseViewDefinition(string $line): array
+    {
+        // example: "view: admin/includes/[head,sidebar,footer]"
+        $line = trim(str_replace('view:', '', $line));
+
+        // Extract folder and file bracket part
+        preg_match('/(.*?)\/\[(.*?)\]/', $line, $matches);
+
+        if (!$matches) {
+            return [$line]; // normal single file case
+        }
+
+        $basePath = trim($matches[1], '/');
+        $files = explode(',', $matches[2]);
+
+        return array_map(fn($file) => "$basePath/$file.blade.php", $files);
     }
 
     protected function generateForeignKeys(array $columns): string
