@@ -10,14 +10,14 @@ class SystemBuilder
 {
     use InteractsWithIO;
 
-    protected array      $definition;
-    protected string     $basePath;
+    protected array $definition;
+    protected string $basePath;
     protected Filesystem $files;
-    protected bool       $force      = false;
-    protected ?string    $moduleName = null;
+    protected bool $force = false;
+    protected ?string $moduleName = null;
 
-    protected bool  $overwriteAll  = false;
-    protected bool  $skipAll       = false;
+    protected bool $overwriteAll = false;
+    protected bool $skipAll = false;
     protected array $createdTables = [];
 
     protected $output;
@@ -36,6 +36,47 @@ class SystemBuilder
         $this->output = $output;
     }
 
+    public static function parseTableDefinition(string $line): array
+    {
+        $line = trim(str_replace('table:', '', $line));
+
+        $parts = explode(' ', $line, 2);
+        $tableName = trim($parts[0]);
+        $columns = [];
+
+        if (isset($parts[1])) {
+            $colDefs = explode(',', $parts[1]);
+            foreach ($colDefs as $c) {
+                $chunks = array_map('trim', explode('|', trim($c)));
+                $colName = array_shift($chunks);
+                $col = ['name' => Str::snake($colName)];
+
+                foreach ($chunks as $rule) {
+                    if (str_starts_with($rule, 'len(')) {
+                        $col['length'] = (int)preg_replace('/[^0-9]/', '', $rule);
+                    } elseif ($rule === 'unique') {
+                        $col['unique'] = true;
+                    } elseif ($rule === 'nullable') {
+                        $col['nullable'] = true;
+                    } elseif (str_starts_with($rule, 'rel(')) {
+                        preg_match('/rel\((.*?),(.*?),(.*?)\)/', $rule, $r);
+                        $col['foreign'] = [
+                            'on' => trim($r[1]),
+                            'references' => trim($r[2]),
+                            'onDelete' => trim($r[3]),
+                        ];
+                    } else {
+                        $col['type'] = $rule;
+                    }
+                }
+                $columns[] = $col;
+            }
+        }
+
+        return ['name' => Str::snake($tableName), 'columns' => $columns, 'timestamps' => true];
+    }
+
+
     public function build(): void
     {
         $this->info("Starting build for system: " . ($this->moduleName ?? 'Base System'));
@@ -46,10 +87,10 @@ class SystemBuilder
         }
 
         foreach ($this->definition['tables'] as $table) {
-            $tableName = $table['name'] ?? null;
+            $tableName = $table['name'] ?? ($table['table'] ?? null);
 
             if (!$tableName) {
-                throw new \Exception("❌ Table name missing in definition!");
+                throw new \Exception("❌ Table name missing. Fix your definition input.");
             }
 
             $this->comment("\nProcessing table: {$tableName}...");
@@ -69,21 +110,21 @@ class SystemBuilder
 
                 $this->info("Table '{$tableName}' generated successfully.");
             } catch (\Exception $e) {
-                $this->error("Failed for table '{$tableName}': {$e->getMessage()}");
+                $this->error("Failed to generate files for table '{$tableName}'. Error: {$e->getMessage()}");
             }
         }
 
         $this->info('✅ System generation complete.');
     }
 
-    // -------------------- Paths & Namespaces --------------------
-
     protected function getModulePath(string $suffix = ''): string
     {
         if ($this->moduleName) {
+            // e.g., base/app/Modules/Invoices/Models
             return $this->basePath . '/app/Modules/' . $this->moduleName . $suffix;
         }
-        return $this->basePath . $suffix;
+        // Standard Laravel paths, e.g., base/app/Models
+        return $this->basePath . '/app' . $suffix;
     }
 
     protected function getModuleNamespace(string $suffix = ''): string
@@ -93,6 +134,8 @@ class SystemBuilder
         }
         return "App" . $suffix;
     }
+
+    // --- Path Definitions ---
 
     protected function migrationPath(): string
     {
@@ -115,7 +158,7 @@ class SystemBuilder
         return $this->basePath . '/resources/views/' . $module . $tableName;
     }
 
-    // -------------------- Generate Methods --------------------
+    // --- Generation Methods ---
 
     protected function generateMigration(array $table): void
     {
@@ -129,20 +172,20 @@ class SystemBuilder
 
         $stub = $this->files->get(__DIR__ . '/../../resources/stubs/migration.stub');
 
-        $content = str_replace(
-            ['{{tableName}}', '{{columns}}', '{{foreign_keys}}', '{{timestamps}}'],
-            [
-                $table['name'],
-                $columnsCode,
-                $fkCode,
-                isset($table['timestamps']) && $table['timestamps'] === false ? '' : "\n        \$table->timestamps();"
-            ],
-            $stub
-        );
+        $content = str_replace(['{{tableName}}', '{{columns}}', '{{foreign_keys}}', '{{timestamps}}'], [
+            $table['name'],
+            $columnsCode,
+            $fkCode,
+            isset($table['timestamps']) && $table['timestamps'] === false ? '' : "\n \$table->timestamps();",
+        ], $stub);
 
         $timestamp = date('Y_m_d_His');
         $fileName = "{$timestamp}_create_{$table['name']}_table.php";
         $fullPath = $migrationPath . '/' . $fileName;
+
+        if (!$table['name']) {
+            throw new \Exception("Table name missing. Check your JSON definition!");
+        }
 
         $this->saveFileWithPrompt($fullPath, $content);
         $this->info("   - Migration created: {$fileName}");
@@ -153,7 +196,8 @@ class SystemBuilder
         $modelPath = $this->modelPath();
         if (!$this->files->isDirectory($modelPath)) $this->files->makeDirectory($modelPath, 0755, true);
 
-        $modelName = $table['model'] ?? ucfirst(Str::singular($table['name']));
+        // Crucial fix: Singularize the table name for the Model name
+        $modelName = ucfirst(Str::singular($table['name']));
         $namespace = $this->getModuleNamespace('\\Models');
         $fillable = $this->getFillableColumns($table['columns'] ?? []);
 
@@ -174,20 +218,32 @@ class SystemBuilder
         $controllerPath = $this->controllerPath();
         if (!$this->files->isDirectory($controllerPath)) $this->files->makeDirectory($controllerPath, 0755, true);
 
-        $modelName = $table['model'] ?? ucfirst(Str::singular($table['name']));
-        $controllerName = $table['controller'] ?? $modelName . 'Controller';
+        // Crucial fix: Singularize the table name for Model/Controller name
+        $modelName = ucfirst(Str::singular($table['name']));
+        $controllerName = $modelName . 'Controller';
+        $controllerNamespace = $this->getModuleNamespace('\\Http\\Controllers');
         $modelNamespace = $this->getModuleNamespace('\\Models');
 
-        $stub = $this->files->get(__DIR__ . '/../../resources/stubs/controller.stub');
+        $isResource = $table['resource'] ?? false; // Check for a 'resource' flag if you added one to the $table array
+        $stubName = $isResource ? 'controller.resource.stub' : 'controller.stub';
+
+        // Fallback to non-resource stub if resource stub doesn't exist
+        $stubFile = __DIR__ . "/../../resources/stubs/{$stubName}";
+        if (!$this->files->exists($stubFile)) {
+            $stubFile = __DIR__ . '/../../resources/stubs/controller.stub';
+            $isResource = false;
+        }
+
+        $stub = $this->files->get($stubFile);
 
         $content = str_replace(
-            ['{{controllerName}}', '{{modelName}}', '{{modelVariable}}', '{{modelNamespace}}'],
-            [$controllerName, $modelName, Str::camel($modelName), $modelNamespace],
+            ['{{controllerName}}', '{{modelName}}', '{{modelVariable}}', '{{controllerNamespace}}', '{{modelNamespace}}'],
+            [$controllerName, $modelName, Str::camel($modelName), $controllerNamespace, $modelNamespace],
             $stub
         );
 
         $this->saveFileWithPrompt("$controllerPath/{$controllerName}.php", $content);
-        $this->info("   - Controller created: {$controllerName}.php");
+        $this->info("   - Controller created: {$controllerName}.php" . ($isResource ? ' (Resource)' : ''));
     }
 
     protected function generateViews(array $table): void
@@ -196,28 +252,47 @@ class SystemBuilder
 
         foreach ($views as $v) {
             $line = trim($v);
-            $files = [];
-            preg_match('/(.*?)\/\[(.*?)\]/', $line, $matches);
-            if ($matches) {
+            $filesToCreate = [];
+            $baseFolder = $table['name']; // Default base folder is table name
+
+            // Regex to find: folder/subfolder/[file1,file2,file3]
+            if (preg_match('/(.*?)\/\[(.*?)\]/', $line, $matches)) {
                 $baseFolder = trim($matches[1], '/');
-                $files = array_map(fn($f) => trim($f) . '.blade.php', explode(',', $matches[2]));
-            } else {
+                $files = array_map(fn($f) => trim($f), explode(',', $matches[2]));
+                $filesToCreate = array_map(fn($f) => $f . '.blade.php', $files);
+            }
+            // Simple folder case: view: users/index
+            elseif (strpos($line, '/') !== false) {
                 $baseFolder = trim($line, '/');
-                $files = ['index.blade.php'];
+                $filesToCreate = ['index.blade.php'];
+            }
+            // Simple file case: view: index
+            else {
+                $filesToCreate = [trim($line) . '.blade.php'];
             }
 
-            foreach ($files as $file) {
+            // If a view command is used, but a specific folder wasn't given, use the table name as base
+            if (empty($baseFolder)) {
+                $baseFolder = $table['name'];
+            }
+
+            foreach ($filesToCreate as $file) {
                 $fullPath = $this->basePath . '/resources/views/' . $baseFolder . '/' . $file;
                 $dir = dirname($fullPath);
+
                 if (!$this->files->isDirectory($dir)) $this->files->makeDirectory($dir, 0755, true);
+
                 $stub = $this->files->get(__DIR__ . '/../../resources/stubs/view.stub');
-                $this->files->put($fullPath, str_replace('{{tableName}}', $table['name'] ?? '', $stub));
-                $this->info("   - View created: $fullPath");
+                $content = str_replace('{{tableName}}', $table['name'] ?? '', $stub);
+
+                $this->saveFileWithPrompt($fullPath, $content);
+                $this->info("   - View created: /resources/views/{$baseFolder}/{$file}");
             }
         }
     }
 
-    // -------------------- Helper Methods --------------------
+
+    // --- Helper Methods ---
 
     private function getFillableColumns(array $columns): array
     {
@@ -236,11 +311,24 @@ class SystemBuilder
         $existingCols = [];
 
         foreach ($columns as $col) {
-            if (in_array($col['name'], $existingCols)) continue;
+
+            if (in_array($col['name'], $existingCols)) {
+                $this->warn("⛔ Skipping duplicate column: {$col['name']}");
+                continue;
+            }
+
             $existingCols[] = $col['name'];
+
+            if (isset($col['type']) && in_array($col['type'], ['id', 'bigIncrements', 'increments'])) {
+                if ($col['type'] === 'id') {
+                    $lines .= " \$table->id();\n";
+                }
+                continue;
+            }
 
             $type = $col['type'] ?? 'string';
             $name = $col['name'];
+
             $base = "\$table->{$type}('{$name}'";
 
             if (!empty($col['length']) && in_array($type, ['string', 'char', 'varchar'])) {
@@ -257,12 +345,15 @@ class SystemBuilder
             if (!empty($col['nullable'])) $base .= "->nullable()";
             if (!empty($col['unique'])) $base .= "->unique()";
             if (!empty($col['index'])) $base .= "->index()";
+
             if (isset($col['default'])) {
                 $default = is_numeric($col['default']) ? $col['default'] : "'" . addslashes($col['default']) . "'";
                 $base .= "->default({$default})";
             }
+
             if (!empty($col['comment'])) $base .= "->comment('" . addslashes($col['comment']) . "')";
-            $lines .= "        $base;\n";
+
+            $lines .= " $base;\n";
         }
 
         return $lines;
@@ -271,6 +362,7 @@ class SystemBuilder
     protected function generateForeignKeys(array $columns): string
     {
         $lines = '';
+
         foreach ($columns as $col) {
             if (!empty($col['foreign'])) {
                 $fk = $col['foreign'];
@@ -279,7 +371,7 @@ class SystemBuilder
                 $ref = $fk['references'] ?? 'id';
 
                 if ($on) {
-                    $lines .= "        \$table->foreign('{$columnName}')->references('{$ref}')->on('{$on}')";
+                    $lines .= " \$table->foreign('{$columnName}')->references('{$ref}')->on('{$on}')";
                     if (!empty($fk['onDelete'])) $lines .= "->onDelete('{$fk['onDelete']}')";
                     if (!empty($fk['onUpdate'])) $lines .= "->onUpdate('{$fk['onUpdate']}')";
                     $lines .= ";\n";
@@ -294,7 +386,7 @@ class SystemBuilder
         if ($this->force || $this->overwriteAll) return true;
         if ($this->skipAll) return false;
 
-        $answer = $this->output->ask("⚠️  $message (y/n/all/skip-all)", 'n');
+        $answer = $this->ask("⚠️  $message (y/n/all/skip-all)", 'n');
 
         if ($answer === 'all') {
             $this->overwriteAll = true;
@@ -311,14 +403,17 @@ class SystemBuilder
     protected function saveFileWithPrompt(string $path, string $content): void
     {
         if ($this->files->exists($path)) {
-            if (!$this->askPermission("File exists: " . basename($path) . ". Replace?")) {
+            if (!$this->askPermission("File already exists: " . basename($path) . ". Replace?")) {
                 return;
             }
         }
 
         try {
             $dir = dirname($path);
-            if (!$this->files->isDirectory($dir)) $this->files->makeDirectory($dir, 0755, true);
+            if (!$this->files->isDirectory($dir)) {
+                $this->files->makeDirectory($dir, 0755, true);
+            }
+
             $this->files->put($path, $content);
         } catch (\Exception $e) {
             $this->error("Failed to write file {$path}: " . $e->getMessage());
