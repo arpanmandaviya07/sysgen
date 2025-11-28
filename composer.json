@@ -5,7 +5,7 @@
   "license": "MIT",
   "autoload": {
     "psr-4": {
-      "Arpan\\SystemBuilder\\": "src/"
+      "Arpanmandaviya\\SystemBuilder\\": "src/"
     }
   },
   "extra": {

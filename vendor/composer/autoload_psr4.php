@@ -6,5 +6,5 @@ $vendorDir = dirname(__DIR__);
 $baseDir = dirname($vendorDir);
 
 return array(
-    'Arpan\\SystemBuilder\\' => array($baseDir . '/src'),
+    'Arpanmandaviya\\SystemBuilder\\' => array($baseDir . '/src'),
 );
