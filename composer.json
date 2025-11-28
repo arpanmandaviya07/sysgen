@@ -1,0 +1,27 @@
+{
+  "name": "arpan/laravel-system-builder",
+  "description": "Generate Laravel migrations, models, controllers, and views from a JSON schema (Laravel 12+)",
+  "type": "library",
+  "license": "MIT",
+  "autoload": {
+    "psr-4": {
+      "Arpan\\SystemBuilder\\": "src/"
+    }
+  },
+  "extra": {
+    "laravel": {
+      "providers": [
+        "Arpan\\SystemBuilder\\GeneratorServiceProvider"
+      ]
+    }
+  },
+  "require": {
+    "php": ">=8.1",
+    "illuminate/support": "^10.0|^11.0|^12.0",
+    "illuminate/console": "^10.0|^11.0|^12.0"
+  },
+  "scripts": {
+    "sys": "php artisan system:build --help",
+    "system:help": "php artisan system:build --help"
+  }
+}
