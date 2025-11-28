@@ -1,84 +1,136 @@
 <?php
 
-namespace Arpanmandaviya\SystemBuilder;
+namespace Arpanmandaviya\SystemBuilder\Builders;
 
 use Illuminate\Support\Str;
 use Illuminate\Filesystem\Filesystem;
+use Illuminate\Console\Concerns\InteractsWithIO; // To use $this->info(), $this->error(), etc. in a builder
 
 class SystemBuilder
 {
-    protected $signature = 'system:build 
-        {--json= : Path to the JSON definition file} 
-        {--force : Overwrite existing files without asking}';
+    use InteractsWithIO; // Trait to mimic Command's output methods
 
-    protected $description = 'Generate migrations, models, controllers, and views from JSON schema.';
+    protected array $definition;
+    protected string $basePath;
+    protected Filesystem $files;
+    protected bool $force = false;
+    protected ?string $moduleName = null; // New property for module folder
 
-    protected $definition;
-    protected $basePath;
-    protected $files;
-    protected $force = false;
+    protected bool $overwriteAll = false;
+    protected bool $skipAll = false;
+    protected array $createdTables = [];
 
-    // NEW: To avoid repeated confirmation
-    protected $overwriteAll = false;
-    protected $skipAll = false;
-    protected $createdTables = [];
+    // The $output property is required by InteractsWithIO trait
+    protected $output;
 
-    public function __construct(array $definition, string $basePath, bool $force = false)
+    public function __construct(array $definition, string $basePath, bool $force = false, ?string $moduleName = null)
     {
         $this->definition = $definition;
         $this->basePath = rtrim($basePath, DIRECTORY_SEPARATOR);
         $this->files = new Filesystem();
         $this->force = $force;
+        $this->moduleName = $moduleName ? Str::studly($moduleName) : null;
     }
 
-    public function build()
+    // Setter for $output, usually called from the Command that instantiates this class
+    public function setOutput($output)
     {
+        $this->output = $output;
+    }
+
+    public function build(): void
+    {
+        $this->info("Starting build for system: " . ($this->moduleName ?? 'Base System'));
+
+        if (!isset($this->definition['tables'])) {
+            $this->error("No tables defined in the schema.");
+            return;
+        }
+
         foreach ($this->definition['tables'] as $table) {
+            $tableName = $table['name'];
+            $this->comment("\nProcessing table: {$tableName}...");
 
-            if (in_array($table['name'], $this->createdTables)) {
-                if (!$this->askPermission("Table '{$table['name']}' already processed. Generate AGAIN?")) {
-                    continue;
+            try {
+                // Check for duplicates in the current run (less relevant in interactive mode, but good guard)
+                if (in_array($tableName, $this->createdTables)) {
+                    if (!$this->askPermission("Table '{$tableName}' already processed. Generate AGAIN?")) {
+                        continue;
+                    }
                 }
+                $this->createdTables[] = $tableName;
+
+                $this->generateMigration($table);
+                $this->generateModel($table);
+                $this->generateController($table);
+                $this->generateViews($table);
+
+                $this->info("Table '{$tableName}' generated successfully.");
+            } catch (\Exception $e) {
+                $this->error("Failed to generate files for table '{$tableName}'. Error: {$e->getMessage()}");
             }
-
-            $this->createdTables[] = $table['name'];
-
-            $this->generateMigration($table);
-            $this->generateModel($table);
-            $this->generateController($table);
-            $this->generateViews($table);
         }
+
+        $this->info('✅ System generation complete.');
     }
 
-    protected function askPermission(string $message): bool
+    /**
+     * Helper method to get namespaced paths based on module.
+     * @param string $suffix
+     * @return string
+     */
+    protected function getModulePath(string $suffix = ''): string
     {
-        if ($this->overwriteAll) return true;
-        if ($this->skipAll) return false;
-
-        echo "\n⚠️  $message (y/n/all/skip-all): ";
-        $answer = trim(fgets(STDIN));
-
-        if ($answer === 'all') {
-            $this->overwriteAll = true;
-            return true;
+        if ($this->moduleName) {
+            // e.g., app/Modules/Invoices/Models
+            return $this->basePath . '/app/Modules/' . $this->moduleName . $suffix;
         }
-        if ($answer === 'skip-all') {
-            $this->skipAll = true;
-            return false;
-        }
-
-        return strtolower($answer) === 'y';
+        // e.g., app/Models (standard Laravel)
+        return $this->basePath . $suffix;
     }
+
+    /**
+     * Helper method to get the correct namespace.
+     * @param string $suffix
+     * @return string
+     */
+    protected function getModuleNamespace(string $suffix = ''): string
+    {
+        if ($this->moduleName) {
+            return "App\\Modules\\" . $this->moduleName . $suffix;
+        }
+        return "App" . $suffix;
+    }
+
+    // --- Path Definitions (Updated to use getModulePath) ---
 
     protected function migrationPath(): string
     {
-        return $this->basePath . '/database/migrations';
+        return $this->basePath . '/database/migrations'; // Migrations always go to base DB folder
     }
 
-    protected function generateMigration(array $table)
+    protected function modelPath(): string
+    {
+        return $this->getModulePath('/Models');
+    }
+
+    protected function controllerPath(): string
+    {
+        return $this->getModulePath('/Http/Controllers');
+    }
+
+    protected function viewPath(string $tableName): string
+    {
+        // Views go to resources/views/module_name/table_name
+        $module = $this->moduleName ? Str::snake($this->moduleName) . '/' : '';
+        return $this->basePath . '/resources/views/' . $module . $tableName;
+    }
+
+    // --- Generation Methods (Updated to use new paths/namespaces) ---
+
+    protected function generateMigration(array $table): void
     {
         $migrationPath = $this->migrationPath();
-
         if (!$this->files->isDirectory($migrationPath)) {
             $this->files->makeDirectory($migrationPath, 0755, true);
         }
@@ -92,37 +144,105 @@ class SystemBuilder
             $table['name'],
             $columnsCode,
             $fkCode,
-            isset($table['timestamps']) && $table['timestamps'] === false
-                ? ''
-                : "\n \$table->timestamps();",
+            isset($table['timestamps']) && $table['timestamps'] === false ? '' : "\n \$table->timestamps();",
         ], $stub);
 
         $timestamp = date('Y_m_d_His');
         $fileName = "{$timestamp}_create_{$table['name']}_table.php";
-        $full = $migrationPath . '/' . $fileName;
+        $fullPath = $migrationPath . '/' . $fileName;
 
-        if ($this->files->exists($full)) {
+        if ($this->files->exists($fullPath)) {
             if (!$this->askPermission("Migration already exists: {$fileName}. Replace?")) {
                 return;
             }
         }
-        try {
-            $this->files->put($full, $content);
-            $this->info("Migration created: {$fileName}");
-        } catch (\Exception $e) {
-            info("SystemBuilder: Failed to create migration {$fileName} - " . $e->getMessage());
+
+        $this->files->put($fullPath, $content);
+        $this->info("   - Migration created: {$fileName}");
+    }
+
+    protected function generateModel(array $table): void
+    {
+        $modelPath = $this->modelPath();
+        if (!$this->files->isDirectory($modelPath)) $this->files->makeDirectory($modelPath, 0755, true);
+
+        $modelName = ucfirst(Str::singular($table['name']));
+        $namespace = $this->getModuleNamespace('\\Models');
+        $fillable = $this->getFillableColumns($table['columns'] ?? []);
+
+        $stub = $this->files->get(__DIR__ . '/../../resources/stubs/model.stub');
+
+        $content = str_replace(
+            ['{{modelName}}', '{{tableName}}', '{{fillable}}', '{{namespace}}'],
+            [$modelName, $table['name'], implode(', ', $fillable), $namespace],
+            $stub
+        );
+
+        $this->saveFileWithPrompt("$modelPath/{$modelName}.php", $content);
+        $this->info("   - Model created: {$modelName}.php");
+    }
+
+    protected function generateController(array $table): void
+    {
+        $controllerPath = $this->controllerPath();
+        if (!$this->files->isDirectory($controllerPath)) $this->files->makeDirectory($controllerPath, 0755, true);
+
+        $modelName = ucfirst(Str::singular($table['name']));
+        $controllerName = $modelName . 'Controller';
+        $modelNamespace = $this->getModuleNamespace('\\Models');
+
+        $stub = $this->files->get(__DIR__ . '/../../resources/stubs/controller.stub');
+
+        $content = str_replace(
+            ['{{controllerName}}', '{{modelName}}', '{{modelVariable}}', '{{modelNamespace}}'],
+            [$controllerName, $modelName, Str::camel($modelName), $modelNamespace],
+            $stub
+        );
+
+        $this->saveFileWithPrompt("$controllerPath/{$controllerName}.php", $content);
+        $this->info("   - Controller created: {$controllerName}.php");
+    }
+
+    protected function generateViews(array $table): void
+    {
+        $viewPath = $this->viewPath($table['name']);
+        if (!$this->files->isDirectory($viewPath)) $this->files->makeDirectory($viewPath, 0755, true);
+
+        $stub = $this->files->get(__DIR__ . '/../../resources/stubs/view.stub');
+
+        // Views use snake_case for the view path and resource routing
+        $viewFolder = $this->moduleName ? Str::snake($this->moduleName) . '.' . $table['name'] : $table['name'];
+
+        $content = str_replace('{{tableName}}', $viewFolder, $stub);
+
+        $this->saveFileWithPrompt("$viewPath/index.blade.php", $content);
+        $this->info("   - View created: {$viewPath}/index.blade.php");
+    }
+
+
+    // --- Helper Methods (No major logic change, but private/protected where appropriate) ---
+
+    private function getFillableColumns(array $columns): array
+    {
+        $fillable = [];
+        foreach ($columns as $col) {
+            if (!in_array($col['name'], ['id', 'created_at', 'updated_at', 'deleted_at'])) {
+                $fillable[] = "'" . $col['name'] . "'";
+            }
         }
+        return $fillable;
     }
 
     protected function generateColumns(array $columns): string
     {
+        // ... (Your existing generateColumns logic, unchanged) ...
         $lines = '';
         $existingCols = [];
 
         foreach ($columns as $col) {
 
             if (in_array($col['name'], $existingCols)) {
-                echo "⛔ Skipping duplicate column: {$col['name']}\n";
+                $this->warn("⛔ Skipping duplicate column: {$col['name']}");
                 continue;
             }
 
@@ -170,6 +290,7 @@ class SystemBuilder
 
     protected function generateForeignKeys(array $columns): string
     {
+        // ... (Your existing generateForeignKeys logic, unchanged) ...
         $lines = '';
 
         foreach ($columns as $col) {
@@ -190,105 +311,44 @@ class SystemBuilder
         return $lines;
     }
 
-    protected function saveFileWithPrompt(string $path, string $content)
+    protected function askPermission(string $message): bool
+    {
+        // Use $this->output->confirm() from InteractsWithIO trait for professional look
+        if ($this->force || $this->overwriteAll) return true;
+        if ($this->skipAll) return false;
+
+        $answer = $this->output->ask("⚠️  $message (y/n/all/skip-all)", 'n');
+
+        if ($answer === 'all') {
+            $this->overwriteAll = true;
+            return true;
+        }
+        if ($answer === 'skip-all') {
+            $this->skipAll = true;
+            return false;
+        }
+
+        return strtolower($answer) === 'y';
+    }
+
+    protected function saveFileWithPrompt(string $path, string $content): void
     {
         if ($this->files->exists($path)) {
-            if (!$this->askPermission("File already exists: $path. Replace?")) {
+            if (!$this->askPermission("File already exists: " . basename($path) . ". Replace?")) {
                 return;
             }
         }
 
-        $this->files->put($path, $content);
-    }
-
-    protected function generateModel(array $table)
-    {
-        $modelPath = $this->basePath . '/app/Models';
-        if (!$this->files->isDirectory($modelPath)) $this->files->makeDirectory($modelPath, 0755, true);
-
-        $modelName = ucfirst(Str::singular($table['name']));
-        $fillable = [];
-
-        foreach ($table['columns'] as $col) {
-            if (!in_array($col['name'], ['id', 'created_at', 'updated_at', 'deleted_at'])) {
-                $fillable[] = "'{$col['name']}'";
+        try {
+            // Ensure directory exists before putting file
+            $dir = dirname($path);
+            if (!$this->files->isDirectory($dir)) {
+                $this->files->makeDirectory($dir, 0755, true);
             }
+
+            $this->files->put($path, $content);
+        } catch (\Exception $e) {
+            $this->error("Failed to write file {$path}: " . $e->getMessage());
         }
-
-        $stub = $this->files->get(__DIR__ . '/../../resources/stubs/model.stub');
-
-        $content = str_replace(['{{modelName}}', '{{tableName}}', '{{fillable}}'], [
-            $modelName,
-            $table['name'],
-            implode(', ', $fillable),
-        ], $stub);
-
-        $this->saveFileWithPrompt("$modelPath/{$modelName}.php", $content);
     }
-
-    protected function generateController(array $table)
-    {
-        $controllerPath = $this->basePath . '/app/Http/Controllers';
-        if (!$this->files->isDirectory($controllerPath)) $this->files->makeDirectory($controllerPath, 0755, true);
-
-        $modelName = ucfirst(Str::singular($table['name']));
-        $controllerName = $modelName . 'Controller';
-
-        $stub = $this->files->get(__DIR__ . '/../../resources/stubs/controller.stub');
-
-        $content = str_replace(['{{controllerName}}', '{{modelName}}', '{{modelVariable}}'], [
-            $controllerName,
-            $modelName,
-            Str::camel($modelName),
-        ], $stub);
-
-        $this->saveFileWithPrompt("$controllerPath/{$controllerName}.php", $content);
-    }
-
-    protected function generateViews(array $table)
-    {
-        $viewPath = $this->basePath . '/resources/views/' . $table['name'];
-        if (!$this->files->isDirectory($viewPath)) $this->files->makeDirectory($viewPath, 0755, true);
-
-        $stub = $this->files->get(__DIR__ . '/../../resources/stubs/view.stub');
-
-        $content = str_replace('{{tableName}}', $table['name'], $stub);
-
-        $this->saveFileWithPrompt("$viewPath/index.blade.php", $content);
-    }
-
-    public function handle()
-    {
-        if ($this->option('help')) {
-            return $this->displayHelp();
-        }
-
-        $this->info("🚀 Running System Builder...");
-        // Your build logic here
-    }
-
-    protected function displayHelp()
-    {
-        $this->line("");
-        $this->info("📘 Laravel System Builder Help");
-        $this->line("------------------------------------");
-
-        $this->comment("Usage:");
-        $this->line("  php artisan system:build --json=path/to/file.json");
-
-        $this->line("");
-        $this->comment("Options:");
-        $this->line("  --json      Path to schema file");
-        $this->line("  --force     Overwrite existing files");
-        $this->line("  --help      Show this help message");
-
-        $this->line("");
-        $this->comment("Example:");
-        $this->line("  php artisan system:build --json=storage/app/system.json");
-        $this->line("");
-
-        return 0;
-    }
-
 }
-
