@@ -11,7 +11,8 @@
   "extra": {
     "laravel": {
       "providers": [
-        "Arpanmandaviya\\SystemBuilder\\GeneratorServiceProvider"
+        "Arpanmandaviya\\SystemBuilder\\GeneratorServiceProvider",
+        "Arpanmandaviya\\SystemBuilder\\Providers\\SystemBuilderServiceProvider"
       ]
     }
   },
