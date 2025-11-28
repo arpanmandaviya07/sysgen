@@ -1,6 +1,6 @@
 <?php
 
-namespace Arpanmandaviya\SystemBuilder\Builders;
+namespace Arpanmandaviya\SystemBuilder;
 
 use Illuminate\Support\Str;
 use Illuminate\Filesystem\Filesystem;

@@ -1,11 +1,11 @@
 <?php
 
 
-namespace Arpan\SystemBuilder\Commands;
+namespace Arpanmandaviya\SystemBuilder\Commands;
 
 
 use Illuminate\Console\Command;
-use Arpan\SystemBuilder\Builders\SystemBuilder;
+use Arpanmandaviya\SystemBuilder\Builders\SystemBuilder;
 
 
 class BuildSystemCommand extends Command

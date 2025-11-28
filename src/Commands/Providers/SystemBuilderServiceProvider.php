@@ -1,6 +1,6 @@
 <?php
 
-namespace Arpan\SystemBuilder\Providers;
+namespace Arpanmandaviya\SystemBuilder\Providers;
 
 use Illuminate\Support\ServiceProvider;
 use Arpan\SystemBuilder\Console\SystemBuildCommand;

@@ -1,7 +1,7 @@
 <?php
 
 
-namespace Arpan\SystemBuilder;
+namespace Arpanmandaviya\SystemBuilder;
 
 
 use Illuminate\Support\ServiceProvider;
