@@ -204,6 +204,12 @@ class SystemBuilder
         $fileName = "{$timestamp}_create_{$table['name']}_table.php";
         $fullPath = $migrationPath . '/' . $fileName;
 
+        $tableName = $table['name'] ?? null;
+
+        if (!$tableName) {
+            throw new \Exception("Table name missing. Check your JSON definition!");
+        }
+
         if ($this->files->exists($fullPath)) {
             if (!$this->askPermission("Migration already exists: {$fileName}. Replace?")) {
                 return;
