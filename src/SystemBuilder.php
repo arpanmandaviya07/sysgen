@@ -106,8 +106,12 @@ class SystemBuilder
                 return;
             }
         }
-
-        $this->files->put($full, $content);
+        try {
+            $this->files->put($full, $content);
+            $this->info("Migration created: {$fileName}");
+        } catch (\Exception $e) {
+            info("SystemBuilder: Failed to create migration {$fileName} - " . $e->getMessage());
+        }
     }
 
     protected function generateColumns(array $columns): string

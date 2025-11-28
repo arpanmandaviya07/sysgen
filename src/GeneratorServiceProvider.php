@@ -3,18 +3,27 @@
 namespace Arpanmandaviya\SystemBuilder;
 
 use Illuminate\Support\ServiceProvider;
+use Arpanmandaviya\SystemBuilder\Commands\BuildSystemCommand;
 
 class GeneratorServiceProvider extends ServiceProvider
 {
     public function register()
     {
-        $this->commands([
-            \Arpanmandaviya\SystemBuilder\Commands\BuildSystemCommand::class,
-        ]);
+        try {
+            $this->commands([
+                BuildSystemCommand::class,
+            ]);
+        } catch (\Exception $e) {
+            info('SystemBuilder: Command registration failed - ' . $e->getMessage());
+        }
     }
 
     public function boot()
     {
-        // boot logic here
+        try {
+            // boot logic if needed
+        } catch (\Exception $e) {
+            info('SystemBuilder: Boot failed - ' . $e->getMessage());
+        }
     }
 }
