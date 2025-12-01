@@ -10,14 +10,14 @@ class SystemBuilder
 {
     use InteractsWithIO;
 
-    protected array $definition;
-    protected string $basePath;
+    protected array      $definition;
+    protected string     $basePath;
     protected Filesystem $files;
-    protected bool $force = false;
-    protected ?string $moduleName = null;
+    protected bool       $force      = false;
+    protected ?string    $moduleName = null;
 
-    protected bool $overwriteAll = false;
-    protected bool $skipAll = false;
+    protected bool  $overwriteAll  = false;
+    protected bool  $skipAll       = false;
     protected array $createdTables = [];
 
     protected $output;
@@ -54,11 +54,11 @@ class SystemBuilder
                 foreach ($chunks as $rule) {
                     if (str_starts_with($rule, 'len(')) {
                         $col['length'] = (int)preg_replace('/[^0-9]/', '', $rule);
-                    } elseif ($rule === 'unique') {
+                    } else if ($rule === 'unique') {
                         $col['unique'] = true;
-                    } elseif ($rule === 'nullable') {
+                    } else if ($rule === 'nullable') {
                         $col['nullable'] = true;
-                    } elseif (str_starts_with($rule, 'rel(')) {
+                    } else if (str_starts_with($rule, 'rel(')) {
                         preg_match('/rel\((.*?),(.*?),(.*?)\)/', $rule, $r);
                         $col['foreign'] = [
                             'on' => trim($r[1]),
@@ -156,6 +156,7 @@ class SystemBuilder
             }
         }
     }
+
     protected function getModulePath(string $suffix = ''): string
     {
         if ($this->moduleName) {
@@ -238,36 +239,47 @@ class SystemBuilder
         $this->createModelFile($modelName, $table['name']);
     }
 
-    protected function createModelFile(string $modelDef, ?string $tableName = null): void
+    protected function createModelFile(string $modelName, ?string $tableName = null, ?array $relations = []): void
     {
         $modelPath = $this->modelPath();
-        if (!$this->files->isDirectory($modelPath)) $this->files->makeDirectory($modelPath, 0755, true);
-
-        $namespace = $this->getModuleNamespace('\\Models');
-
-        // Determine model name and table
-        $modelName = $modelDef['name'] ?? Str::studly($modelDef);
-        $tableName = $tableName ?? ($modelDef['table'] ?? Str::snake(Str::plural($modelName)));
-
-        $fillable = [];
-        if ($tableName) {
-            $fillable = $this->getFillableColumns($this->getColumnsForTable($tableName));
+        if (!$this->files->isDirectory($modelPath)) {
+            $this->files->makeDirectory($modelPath, 0755, true);
         }
-        $fillableCode = $fillable ? implode(",\n        ", $fillable) : "/* fillable columns here */";
 
-        // Generate relationships
-        $relationsCode = $this->generateRelationships($modelDef['relations'] ?? []);
+        $file = $modelPath . '/' . $modelName . '.php';
 
-        $stub = $this->files->get(__DIR__ . '/../../resources/stubs/model.stub');
+        $fillable = $this->getFillableColumns($tableName); // Existing logic for fillable
 
-        $content = str_replace(
-            ['{{modelName}}', '{{tableName}}', '{{fillable}}', '{{namespace}}', '{{relationships}}'],
-            [$modelName, $tableName, $fillableCode, $namespace, $relationsCode],
-            $stub
-        );
+        // Build relations methods
+        $relationMethods = '';
+        foreach ($relations as $relation) {
+            // format: "worker:belongsTo" or "tasks:hasMany"
+            [$relatedModel, $type] = explode(':', $relation);
 
-        $this->saveFileWithPrompt("$modelPath/{$modelName}.php", $content);
-        $this->info("   - Model created: {$modelName}.php");
+            $relatedModelClass = ucfirst($relatedModel);
+
+            $methodName = $type === 'hasMany' ? Str::camel(Str::plural($relatedModel)) : Str::camel($relatedModel);
+
+            $relationMethods .= "\n    public function $methodName()\n    {\n        return \$this->$type($relatedModelClass::class);\n    }\n";
+        }
+
+        $template = "<?php
+
+namespace App\Models;
+
+use Illuminate\Database\Eloquent\Model;
+
+class $modelName extends Model
+{
+    protected \$table = '$tableName';
+
+    protected \$fillable = [
+        " . implode(",\n        ", $fillable) . "
+    ];$relationMethods
+}
+";
+
+        $this->files->put($file, $template);
     }
 
     protected function generateRelationships(array $relations): string
@@ -304,7 +316,6 @@ class SystemBuilder
     }
 
 
-
     protected function generateController(array $table): void
     {
         $tableBasedName = ucfirst(Str::singular($table['name'])) . 'Controller';
@@ -327,7 +338,7 @@ class SystemBuilder
 
                 if (strtolower($choice) === 'json') {
                     $controllerToGenerate = $userController;
-                } elseif (strtolower($choice) === 'both') {
+                } else if (strtolower($choice) === 'both') {
                     $createBoth = true;
                 }
                 // else: controllerToGenerate remains tableBasedName
@@ -400,14 +411,12 @@ class SystemBuilder
             $folder = trim($matches[1], '/');
             $files = array_map('trim', explode(',', $matches[2]));
             $filesToCreate = array_map(fn($f) => $f . '.blade.php', $files);
-        }
-        // Try to parse format: folder/filename (treat filename as index if no brackets)
-        elseif (strpos($line, '/') !== false) {
+        } // Try to parse format: folder/filename (treat filename as index if no brackets)
+        else if (strpos($line, '/') !== false) {
             $parts = explode('/', trim($line, '/'));
             $folder = $parts[0];
             $filesToCreate = [end($parts) . '.blade.php'];
-        }
-        // Simple file case: index or file.blade.php
+        } // Simple file case: index or file.blade.php
         else {
             $filesToCreate = [Str::endsWith($line, '.blade.php') ? $line : $line . '.blade.php'];
             $folder = $tableName ?? 'default';
