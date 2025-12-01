@@ -111,22 +111,18 @@ class SystemBuilder
                     }
                     $this->createdTables[] = $tableName;
 
-                    // Increment counter before generation to ensure unique timestamp
                     $this->migrationCounter++;
                     $this->generateMigration($table, $this->migrationCounter);
 
                     $this->generateModel($table);
                     $controllerName = $this->generateController($table);
 
-                    // Add the generated controller to the list for route generation
                     if ($controllerName) {
-                        // $controllerName is the base name, e.g., 'Post'
                         if (!in_array($controllerName, $generatedControllers)) {
                             $generatedControllers[] = $controllerName;
                         }
                     }
 
-                    // Generate views *if* defined inside the table definition
                     if (!empty($table['views'])) {
                         $this->generateTableViews($table);
                     }
@@ -137,25 +133,20 @@ class SystemBuilder
                 }
             }
 
-            // Update routes once after processing all tables
             if (!empty($generatedControllers)) {
                 $this->updateWebRoutes($generatedControllers);
             }
         }
-
-        // --- 2. Process general components (models, controllers, views) ---
         $this->generateGeneralComponents();
 
 
         $this->info('✅ System generation complete.');
     }
 
-    // --- New Method for Non-Table Components ---
     protected function generateGeneralComponents(): void
     {
         $this->comment("\nProcessing general components...");
 
-        // Models
         if (isset($this->definition['models'])) {
             foreach ($this->definition['models'] as $model) {
                 $modelName = is_array($model) ? ($model['name'] ?? null) : $model;
@@ -167,14 +158,12 @@ class SystemBuilder
             }
         }
 
-        // Controllers
         if (isset($this->definition['controllers'])) {
             foreach ($this->definition['controllers'] as $controllerDef) {
                 $this->createControllerFile($controllerDef);
             }
         }
 
-        // Views (General utility views)
         if (isset($this->definition['views'])) {
             foreach ($this->definition['views'] as $viewDefinition) {
                 $this->createViewFile($viewDefinition);
@@ -215,14 +204,6 @@ class SystemBuilder
         return $this->getModulePath('/Http/Controllers');
     }
 
-
-    // --- Generation Methods ---
-
-    /**
-     * @param array $table
-     * @param int   $index Used to ensure unique timestamps for file ordering
-     * @throws \Exception
-     */
     protected function generateMigration(array $table, int $index): void
     {
         $migrationPath = $this->migrationPath();
@@ -260,7 +241,7 @@ class SystemBuilder
         }
 
         $this->saveFileWithPrompt($fullPath, $content);
-        $this->info("   - Migration created: {$fileName}");
+        $this->info("- Migration created: {$fileName}");
     }
 
     protected function generateModel(array $table): void
@@ -269,7 +250,7 @@ class SystemBuilder
         $generalModels = array_map(fn($m) => is_array($m) ? ($m['name'] ?? '') : $m, $this->definition['models'] ?? []);
 
         if (in_array($modelName, $generalModels)) {
-            $this->warn("   - Model name '{$modelName}' is explicitly defined in 'models'. Skipping table-based generation.");
+            $this->warn("- Model name '{$modelName}' is explicitly defined in 'models'. Skipping table-based generation.");
             return;
         }
 
@@ -304,15 +285,9 @@ class SystemBuilder
         );
 
         $this->saveFileWithPrompt("$modelPath/{$modelName}.php", $content);
-        $this->info("   - Model created: {$modelName}.php");
+        $this->info("- Model created: {$modelName}.php");
     }
 
-    /**
-     * Implements the logic for updating web.php with resource routes.
-     * * @param array $routes List of base controller names (e.g., ['Post', 'User'])
-     *
-     * @return void
-     */
     protected function updateWebRoutes(array $routes): void
     {
         $webFile = $this->basePath . '/routes/web.php';
@@ -379,19 +354,19 @@ class SystemBuilder
             switch (strtolower($type)) {
                 case 'belongsto':
                     $modelClass = ucfirst(Str::studly(Str::singular($name)));
-                    $code .= "    public function {$methodName}()\n    {\n        return \$this->belongsTo(\\{$modelNamespace}{$modelClass}::class);\n    }\n\n";
+                    $code .= "    public function {$methodName}()\n{\nreturn \$this->belongsTo(\\{$modelNamespace}{$modelClass}::class);\n    }\n\n";
                     break;
                 case 'hasmany':
                     $modelClass = ucfirst(Str::studly(Str::singular($name)));
-                    $code .= "    public function {$methodName}()\n    {\n        return \$this->hasMany(\\{$modelNamespace}{$modelClass}::class);\n    }\n\n";
+                    $code .= "    public function {$methodName}()\n {\nreturn \$this->hasMany(\\{$modelNamespace}{$modelClass}::class);\n    }\n\n";
                     break;
                 case 'hasone':
                     $modelClass = ucfirst(Str::studly(Str::singular($name)));
-                    $code .= "    public function {$methodName}()\n    {\n        return \$this->hasOne(\\{$modelNamespace}{$modelClass}::class);\n    }\n\n";
+                    $code .= "    public function {$methodName}()\n{\nreturn \$this->hasOne(\\{$modelNamespace}{$modelClass}::class);\n    }\n\n";
                     break;
                 case 'belongstomany':
                     $modelClass = ucfirst(Str::studly(Str::singular($name)));
-                    $code .= "    public function {$methodName}()\n    {\n        return \$this->belongsToMany(\\{$modelNamespace}{$modelClass}::class);\n    }\n\n";
+                    $code .= "    public function {$methodName}()\n {\n return \$this->belongsToMany(\\{$modelNamespace}{$modelClass}::class);\n    }\n\n";
                     break;
             }
         }
@@ -399,14 +374,6 @@ class SystemBuilder
         return $code;
     }
 
-
-    /**
-     * Generates a controller based on a table definition and returns its base name.
-     *
-     * @param array $table
-     * @return string|null The base name of the controller (e.g., 'Post') generated or null if skipped.
-     * @throws \Exception
-     */
     protected function generateController(array $table): ?string
     {
         $tableBasedName = ucfirst(Str::singular($table['name'])) . 'Controller';
@@ -419,7 +386,7 @@ class SystemBuilder
         $userDefinedNames = array_map(fn($c) => is_array($c) ? ($c['name'] ?? '') : $c, $userDefinedControllers);
 
         if (in_array($tableBasedName, $userDefinedNames)) {
-            $this->warn("⚠️  Controller '{$tableBasedName}' is implied by table '{$table['name']}' AND explicitly listed in 'controllers'. Skipping table-based creation.");
+            $this->warn("⚠️ Controller '{$tableBasedName}' is implied by table '{$table['name']}' AND explicitly listed in 'controllers'. Skipping table-based creation.");
             return null;
         }
 
@@ -478,8 +445,6 @@ class SystemBuilder
         $this->info("- Controller created: {$controllerName}.php");
     }
 
-
-    // Generates views listed directly inside the 'tables' array
     protected function generateTableViews(array $table): void
     {
         $views = $table['views'] ?? [];
@@ -488,7 +453,6 @@ class SystemBuilder
         }
     }
 
-    // Generates general views listed in the top-level 'views' array
     protected function createViewFile(string $viewDefinition, ?string $tableName = null): void
     {
         $line = trim($viewDefinition);
@@ -524,9 +488,6 @@ class SystemBuilder
             $this->info("- View created: /resources/views/{$folder}/{$file}");
         }
     }
-
-
-    // --- Helper Methods ---
 
     private function getColumnsForTable(string $tableName): array
     {
@@ -564,7 +525,6 @@ class SystemBuilder
 
             $existingCols[] = $col['name'];
 
-            // Skip default timestamps
             if (in_array($col['name'], ['created_at', 'updated_at'])) {
                 $this->warn("⛔ Skipping explicit timestamp column '{$col['name']}'. Use `timestamps: false` to disable default timestamps.");
                 continue;
@@ -642,7 +602,7 @@ class SystemBuilder
         if ($this->force || $this->overwriteAll) return true;
         if ($this->skipAll) return false;
 
-        $answer = $this->ask("⚠️  $message (y/n/all/skip-all)", 'n');
+        $answer = $this->ask("⚠️$message (y/n/all/skip-all)", 'n');
 
         if ($answer === 'all') {
             $this->overwriteAll = true;

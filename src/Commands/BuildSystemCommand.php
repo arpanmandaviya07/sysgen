@@ -34,6 +34,7 @@ class BuildSystemCommand extends Command
 
             $this->info('✅ System generation complete.');
             $this->comment('✨ Don\'t forget to run "php artisan migrate" and setup your routes.');
+            $this->comment('⚠ Generated code may need verification. Please check all pages and routes before running.');
             return 0;
         } catch (\Exception $e) {
             $this->error('Error: ' . $e->getMessage());

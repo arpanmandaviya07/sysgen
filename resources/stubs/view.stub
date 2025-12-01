@@ -1,28 +1,14 @@
-@extends('layout.app')
-
-@section('content')
-<h1 class="text-xl font-semibold mb-4">{{ ucfirst('{{tableName}}') }}</h1>
-
-<a href="{{ route('{{tableName}}.create') }}" class="btn btn-primary mb-3">Add New</a>
-
-<table class="table table-bordered">
-    <thead>
-        <tr>
-            <th>#</th>
-            {{-- Auto-generate table headers later --}}
-        </tr>
-    </thead>
-    <tbody>
-        @forelse($items as $item)
-            <tr>
-                <td>{{ $item->id }}</td>
-            </tr>
-        @empty
-            <tr>
-                <td colspan="10">No records found.</td>
-            </tr>
-        @endforelse
-    </tbody>
-</table>
-
-@endsection
+<!doctype html>
+<html lang="en">
+	<head>
+		<meta charset="UTF-8">
+		<meta name="viewport" content="width=device-width, user-scalable=no, initial-scale=1.0, maximum-scale=1.0, minimum-scale=1.0">
+		<meta http-equiv="X-UA-Compatible" content="ie=edge">
+		<title>Title Of The Page</title>
+	</head>
+	<body>
+        {{--
+        Write Your Code Or You Can Modify Anything From The Page According Your Choice
+        --}}
+	</body>
+</html>

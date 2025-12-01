@@ -9,45 +9,45 @@ class {{controllerName}} extends Controller
 {
     public function index()
     {
-        $items = {{modelName}}::paginate(10);
-        return view('{{modelVariable}}.index', compact('items'));
+        /*$items = {{modelName}}::paginate(10);
+        return view('{{modelVariable}}.index', compact('items'));*/
     }
 
     public function create()
     {
-        return view('{{modelVariable}}.create');
+        /*return view('{{modelVariable}}.create');*/
     }
 
     public function store(Request $request)
     {
-        $data = $request->validate([
+        */$data = $request->validate([
             // TODO: Auto-generate validation rules based on JSON spec
         ]);
 
         {{modelName}}::create($data);
 
-        return redirect()->route('{{modelVariable}}.index')->with('success', '{{modelName}} created.');
+        return redirect()->route('{{modelVariable}}.index')->with('success', '{{modelName}} created.');*/
     }
 
     public function edit({{modelName}} ${{modelVariable}})
     {
-        return view('{{modelVariable}}.edit', compact('{{modelVariable}}'));
+        */return view('{{modelVariable}}.edit', compact('{{modelVariable}}'));*/
     }
 
     public function update(Request $request, {{modelName}} ${{modelVariable}})
     {
-        $data = $request->validate([
+        */$data = $request->validate([
             // TODO: Auto-generate validation rules based on JSON spec
         ]);
 
         ${{modelVariable}}->update($data);
 
-        return redirect()->route('{{modelVariable}}.index')->with('success', '{{modelName}} updated.');
+        return redirect()->route('{{modelVariable}}.index')->with('success', '{{modelName}} updated.'); */
     }
 
     public function destroy({{modelName}} ${{modelVariable}})
     {
-        ${{modelVariable}}->delete();
-        return redirect()->route('{{modelVariable}}.index')->with('success', '{{modelName}} deleted.');
+        */${{modelVariable}}->delete();
+        redirect()->route('{{modelVariable}}.index')->with('success', '{{modelName}} deleted.');*/
     }
 }
