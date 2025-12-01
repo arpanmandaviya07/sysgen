@@ -5,12 +5,7 @@ namespace Arpanmandaviya\SystemBuilder\Builders;
 use Illuminate\Support\Str;
 use Illuminate\Filesystem\Filesystem;
 use Illuminate\Console\Concerns\InteractsWithIO;
-use Illuminate\Support\Facades\File;
-
-// Added for convenience, though Filesystem is already used
 use Carbon\Carbon;
-
-// Use Carbon for more robust time manipulation
 
 class SystemBuilder
 {
@@ -26,8 +21,9 @@ class SystemBuilder
     protected bool  $skipAll       = false;
     protected array $createdTables = [];
 
-    // --- New property to manage migration ordering
-    protected int $migrationCounter = 0;
+    // For guaranteeing unique migration timestamps per run
+    protected int    $migrationCounter = 0;
+    protected Carbon $migrationBaseTime;
 
     protected $output;
 
@@ -38,6 +34,9 @@ class SystemBuilder
         $this->files = new Filesystem();
         $this->force = $force;
         $this->moduleName = $moduleName ? Str::studly($moduleName) : null;
+
+        // set a base time (now) for migration timestamps and freeze here for the run
+        $this->migrationBaseTime = Carbon::now();
     }
 
     public function setOutput($output)
@@ -45,61 +44,22 @@ class SystemBuilder
         $this->output = $output;
     }
 
-    public static function parseTableDefinition(string $line): array
-    {
-        $line = trim(str_replace('table:', '', $line));
-
-        $parts = explode(' ', $line, 2);
-        $tableName = trim($parts[0]);
-        $columns = [];
-
-        if (isset($parts[1])) {
-            $colDefs = explode(',', $parts[1]);
-            foreach ($colDefs as $c) {
-                $chunks = array_map('trim', explode('|', trim($c)));
-                $colName = array_shift($chunks);
-                $col = ['name' => Str::snake($colName)];
-
-                foreach ($chunks as $rule) {
-                    if (str_starts_with($rule, 'len(')) {
-                        $col['length'] = (int)preg_replace('/[^0-9]/', '', $rule);
-                    } else if ($rule === 'unique') {
-                        $col['unique'] = true;
-                    } else if ($rule === 'nullable') {
-                        $col['nullable'] = true;
-                    } else if (str_starts_with($rule, 'rel(')) {
-                        preg_match('/rel\((.*?),(.*?),(.*?)\)/', $rule, $r);
-                        $col['foreign'] = [
-                            'on' => trim($r[1]),
-                            'references' => trim($r[2]),
-                            'onDelete' => trim($r[3]),
-                        ];
-                    } else {
-                        $col['type'] = $rule;
-                    }
-                }
-                $columns[] = $col;
-            }
-        }
-
-        return ['name' => Str::snake($tableName), 'columns' => $columns, 'timestamps' => true];
-    }
-
-
+    /**
+     * Build the system (tables => migrations, models, controllers, views; then general components)
+     */
     public function build(): void
     {
         $this->info("Starting build for system: " . ($this->moduleName ?? 'Base System'));
 
-        // --- 1. Process tables first ---
-        if (isset($this->definition['tables'])) {
-            // Collect controllers for route generation outside the loop
-            $generatedControllers = [];
+        $generatedControllers = [];
 
+        // --- 1. Process tables first (so migrations are created in a predictable order) ---
+        if (!empty($this->definition['tables'])) {
             foreach ($this->definition['tables'] as $table) {
                 $tableName = $table['name'] ?? ($table['table'] ?? null);
-
                 if (!$tableName) {
-                    throw new \Exception("❌ Table name missing. Fix your definition input.");
+                    $this->error("❌ Table name missing in one of your table definitions. Skipping...");
+                    continue;
                 }
 
                 $this->comment("\nProcessing table: {$tableName}...");
@@ -110,80 +70,77 @@ class SystemBuilder
                             continue;
                         }
                     }
+
                     $this->createdTables[] = $tableName;
 
-                    // Increment counter before generation to ensure unique timestamp
+                    // increment migration counter to ensure unique timestamp for this file
                     $this->migrationCounter++;
                     $this->generateMigration($table, $this->migrationCounter);
 
+                    // create model and controller for this table
                     $this->generateModel($table);
-                    $controllerName = $this->generateController($table);
-
-                    // Add the generated controller to the list for route generation
-                    if ($controllerName) {
-                        // $controllerName is the full name, e.g., 'PostController', extract 'Post'
-                        $baseControllerName = str_replace('Controller', '', $controllerName);
-                        if (!in_array($baseControllerName, $generatedControllers)) {
-                            $generatedControllers[] = $baseControllerName;
-                        }
+                    $controllerBase = $this->generateController($table);
+                    if ($controllerBase) {
+                        $generatedControllers[] = $controllerBase;
                     }
 
-                    // Generate views *if* defined inside the table definition
+                    // table-scoped views
                     if (!empty($table['views'])) {
                         $this->generateTableViews($table);
                     }
 
                     $this->info("Table '{$tableName}' generated successfully.");
-                } catch (\Exception $e) {
-                    $this->error("Failed to generate files for table '{$tableName}'. Error: {$e->getMessage()}");
+                } catch (\Throwable $e) {
+                    $this->error("Failed to generate for table '{$tableName}': " . $e->getMessage());
                 }
             }
 
-            // Update routes once after processing all tables
+            // update routes once after all tables processed
             if (!empty($generatedControllers)) {
                 $this->updateWebRoutes($generatedControllers);
             }
         }
 
-        // --- 2. Process general components (models, controllers, views) ---
+        // --- 2. Process general components (models/controllers/views listed at top-level) ---
         $this->generateGeneralComponents();
 
-
-        $this->info('✅ System generation complete.');
+        $this->info("✅ System generation complete.");
     }
 
-    // --- New Method for Non-Table Components ---
+    /**
+     * Generate non-table-specific components declared in top-level 'models', 'controllers', 'views'
+     */
     protected function generateGeneralComponents(): void
     {
         $this->comment("\nProcessing general components...");
 
-        // Models
-        if (isset($this->definition['models'])) {
-            foreach ($this->definition['models'] as $model) {
-                // $model is either a string or an array definition
-                $modelName = is_array($model) ? ($model['name'] ?? null) : $model;
-                $tableName = is_array($model) ? ($model['table'] ?? null) : null;
-
+        // Models (top-level)
+        if (!empty($this->definition['models'])) {
+            foreach ($this->definition['models'] as $modelDef) {
+                $modelName = is_array($modelDef) ? ($modelDef['name'] ?? null) : $modelDef;
+                $tableName = is_array($modelDef) ? ($modelDef['table'] ?? null) : null;
                 if ($modelName) {
-                    $this->createModelFile($model, $tableName);
+                    $this->createModelFile($modelDef, $tableName);
                 }
             }
         }
 
-        // Controllers
-        if (isset($this->definition['controllers'])) {
+        // Controllers (top-level)
+        if (!empty($this->definition['controllers'])) {
             foreach ($this->definition['controllers'] as $controllerDef) {
                 $this->createControllerFile($controllerDef);
             }
         }
 
-        // Views (General utility views)
-        if (isset($this->definition['views'])) {
-            foreach ($this->definition['views'] as $viewDefinition) {
-                $this->createViewFile($viewDefinition);
+        // Views (top-level)
+        if (!empty($this->definition['views'])) {
+            foreach ($this->definition['views'] as $v) {
+                $this->createViewFile($v, null);
             }
         }
     }
+
+    // --- Path / Namespace helpers ---
 
     protected function getModulePath(string $suffix = ''): string
     {
@@ -201,8 +158,6 @@ class SystemBuilder
         return "App" . $suffix;
     }
 
-    // --- Path Definitions ---
-
     protected function migrationPath(): string
     {
         return $this->basePath . '/database/migrations';
@@ -218,13 +173,13 @@ class SystemBuilder
         return $this->getModulePath('/Http/Controllers');
     }
 
-
-    // --- Generation Methods ---
+    // --- Migration generation ---
 
     /**
+     * Generate migration file content and save it.
+     *
      * @param array $table
-     * @param int   $index Used to ensure unique timestamps for file ordering
-     * @throws \Exception
+     * @param int   $index index to offset timestamp seconds so migrations in same run have distinct timestamps
      */
     protected function generateMigration(array $table, int $index): void
     {
@@ -233,60 +188,209 @@ class SystemBuilder
             $this->files->makeDirectory($migrationPath, 0755, true);
         }
 
-        $columnsCode = $this->generateColumns($table['columns'] ?? []);
-        $fkCode = $this->generateForeignKeys($table['columns'] ?? []);
+        $columns = $table['columns'] ?? [];
 
-        $stub = $this->files->get(__DIR__ . '/../../resources/stubs/migration.stub');
+        // detect if user explicitly included created_at/updated_at columns
+        $hasExplicitCreatedAt = $this->columnExists($columns, 'created_at');
+        $hasExplicitUpdatedAt = $this->columnExists($columns, 'updated_at');
 
-        // Logic for timestamps replacement
+        // Generate column lines — this method will produce column declarations and possibly inline foreign key column declarations
+        $columnsCode = $this->generateColumnsCode($columns);
+
+        // Generate foreign keys as separate ->foreign(...) statements only for columns that require separate FK statements
+        $fkCode = $this->generateForeignKeysCode($columns);
+
+        // timestamps insertion: if both explicit present -> don't add $table->timestamps()
         $timestampsCode = '';
-        if (!isset($table['timestamps']) || $table['timestamps'] !== false) {
-            $timestampsCode = "\n \$table->timestamps();";
+        if (!($hasExplicitCreatedAt || $hasExplicitUpdatedAt)) {
+            $timestampsCode = "\n            \$table->timestamps();";
         }
 
-        $content = str_replace(['{{tableName}}', '{{columns}}', '{{foreign_keys}}', '{{timestamps}}'], [
-            $table['name'],
-            $columnsCode,
-            $fkCode,
-            $timestampsCode,
-        ], $stub);
+        // load stub
+        $stubPath = __DIR__ . '/../../resources/stubs/migration.stub';
+        if (!$this->files->exists($stubPath)) {
+            // fallback: small inline default if stub missing
+            $stub = <<<PHP
+<?php
 
-        // --- Custom logic to ensure unique, sequential timestamp (Step 1 of fix)
-        $timestamp = Carbon::now()->addSeconds($index)->format('Y_m_d_His');
-        // --- End of Custom logic
+use Illuminate\Database\Migrations\Migration;
+use Illuminate\Database\Schema\Blueprint;
+use Illuminate\Support\Facades\Schema;
 
+return new class extends Migration {
+    public function up(): void
+    {
+        Schema::create('{{tableName}}', function (Blueprint \$table) {
+{{columns}}
+{{foreign_keys}}{{timestamps}}
+        });
+    }
+
+    public function down(): void
+    {
+        Schema::dropIfExists('{{tableName}}');
+    }
+};
+PHP;
+        } else {
+            $stub = $this->files->get($stubPath);
+        }
+
+        $content = str_replace(
+            ['{{tableName}}', '{{columns}}', '{{foreign_keys}}', '{{timestamps}}'],
+            [$table['name'], $columnsCode, $fkCode, $timestampsCode],
+            $stub
+        );
+
+        // timestamp filename logic: migrationBaseTime + index seconds ensures sequential timestamps and uniqueness within run
+        $timestamp = $this->migrationBaseTime->copy()->addSeconds($index - 1)->format('Y_m_d_His');
         $fileName = "{$timestamp}_create_{$table['name']}_table.php";
         $fullPath = $migrationPath . '/' . $fileName;
 
         if (!$table['name']) {
-            throw new \Exception("Table name missing. Check your JSON definition!");
+            throw new \Exception("Table name missing in migration generation.");
         }
 
         $this->saveFileWithPrompt($fullPath, $content);
-        $this->info("   - Migration created: {$fileName}");
+        $this->info("   - Migration created: {$fileName}");
     }
+
+    /**
+     * Return true if a column with given name exists in columns array
+     */
+    protected function columnExists(array $columns, string $colName): bool
+    {
+        foreach ($columns as $c) {
+            if (($c['name'] ?? null) === $colName) return true;
+        }
+        return false;
+    }
+
+    /**
+     * Build the column definitions lines for migration
+     * - If column has 'foreign' and its type is 'integer' or not specified, generate $table->foreignId(...)
+     * - Skip explicit created_at / updated_at because timestamps() handles them
+     */
+    protected function generateColumnsCode(array $columns): string
+    {
+        $lines = '';
+        $existing = [];
+
+        foreach ($columns as $col) {
+            if (empty($col['name'])) continue;
+            $name = $col['name'];
+            if (in_array($name, $existing)) continue;
+            $existing[] = $name;
+
+            // Skip explicit timestamps (we'll handle via timestamps())
+            if (in_array($name, ['created_at', 'updated_at'])) {
+                // do not add explicit timestamp column here
+                continue;
+            }
+
+            $type = $col['type'] ?? 'string';
+
+            // handle id shorthand
+            if (in_array($type, ['id', 'bigIncrements', 'increments'])) {
+                $lines .= "            \$table->id();\n";
+                continue;
+            }
+
+            // if foreign present and integer-like, prefer foreignId / unsignedBigInteger
+            $hasForeign = !empty($col['foreign']);
+            if ($hasForeign && in_array($type, ['integer', 'bigInteger', 'unsignedBigInteger', ''])) {
+                // choose foreignId (unsignedBigInteger) by default for modern Laravel
+                $lines .= "            \$table->foreignId('{$name}')";
+                if (!empty($col['nullable'])) $lines .= "->nullable()";
+                // don't chain constrained here; kept in separate fk code OR we can attempt to add ->constrained('table')->onDelete('...') if 'on' available
+                $lines .= ";\n";
+                continue;
+            }
+
+            // build base type
+            // handle decimal: length may be "10,2" or array -> if numeric string contains comma, split
+            $base = "            \$table->{$type}('{$name}'";
+            if (!empty($col['length'])) {
+                // decimal/spaces: allow "10,2" or numeric
+                $len = $col['length'];
+                if (is_string($len) && Str::contains($len, ',')) {
+                    // For decimal you must pass precision, scale separate
+                    $parts = explode(',', str_replace(' ', '', $len));
+                    if (count($parts) === 2) {
+                        $base .= ", {$parts[0]}, {$parts[1]}";
+                    } else {
+                        $base .= ", {$len}";
+                    }
+                } else {
+                    $base .= ", {$len}";
+                }
+            }
+            $base .= ")";
+
+            if (!empty($col['nullable'])) $base .= "->nullable()";
+            if (!empty($col['unique'])) $base .= "->unique()";
+            if (!empty($col['index'])) $base .= "->index()";
+            if (isset($col['default'])) {
+                $default = is_numeric($col['default']) ? $col['default'] : "'" . addslashes($col['default']) . "'";
+                $base .= "->default({$default})";
+            }
+            if (!empty($col['comment'])) $base .= "->comment('" . addslashes($col['comment']) . "')";
+
+            $lines .= $base . ";\n";
+        }
+
+        return $lines;
+    }
+
+    /**
+     * Build separate foreign key statements (where we prefer explicit ->foreign(...) calls).
+     * For columns that were created with foreignId we will try to convert to ->constrained if possible
+     */
+    protected function generateForeignKeysCode(array $columns): string
+    {
+        $lines = '';
+
+        foreach ($columns as $col) {
+            if (empty($col['foreign'])) continue;
+            $fk = $col['foreign'];
+            $colName = $col['name'];
+            $on = $fk['on'] ?? null;
+            $ref = $fk['references'] ?? 'id';
+            $onDelete = $fk['onDelete'] ?? null;
+            $onUpdate = $fk['onUpdate'] ?? null;
+
+            if (!$on) continue;
+
+            // If we created a foreignId column above, we can use ->constrained('table')->onDelete(...) by emitting a separate modify statement,
+            // but simpler & robust: add explicit foreign constraint
+            $lines .= "            \$table->foreign('{$colName}')->references('{$ref}')->on('{$on}')";
+            if ($onDelete) $lines .= "->onDelete('{$onDelete}')";
+            if ($onUpdate) $lines .= "->onUpdate('{$onUpdate}')";
+            $lines .= ";\n";
+        }
+
+        return $lines;
+    }
+
+    // --- Model generation ---
 
     protected function generateModel(array $table): void
     {
-        // Crucial fix: Singularize the table name for the Model name
         $modelName = ucfirst(Str::singular($table['name']));
 
-        // Check if this model name's associated controller is in the general 'controllers' array
-        // We only check controllers because the 'models' array is for non-table-based models, and
-        // table-based models are often inferred from the table name.
-
-        // This check is slightly simplified from your original, focusing on avoiding generating
-        // a model if a general model with the same name is defined, which is clearer.
-        $generalModels = array_map(fn($m) => is_array($m) ? ($m['name'] ?? '') : $m, $this->definition['models'] ?? []);
-
-        if (in_array($modelName, $generalModels)) {
-            $this->warn("   - Model name '{$modelName}' is explicitly defined in 'models'. Skipping table-based generation.");
+        // If model explicitly listed in top-level models, skip auto-generation (we'll create it later via generateGeneralComponents)
+        $explicitModels = array_map(fn($m) => is_array($m) ? ($m['name'] ?? '') : $m, $this->definition['models'] ?? []);
+        if (in_array($modelName, $explicitModels)) {
+            $this->warn("   - Model '{$modelName}' is explicitly defined in 'models' array; skipping table-based model creation.");
             return;
         }
 
         $this->createModelFile($modelName, $table['name']);
     }
 
+    /**
+     * Create model file. $modelDef can be string (name) or array with name/table/relations.
+     */
     protected function createModelFile(string|array $modelDef, ?string $tableName = null): void
     {
         $modelPath = $this->modelPath();
@@ -294,22 +398,49 @@ class SystemBuilder
 
         $namespace = $this->getModuleNamespace('\\Models');
 
-        // Determine model name and table
-        $modelName = is_array($modelDef) ? ($modelDef['name'] ?? Str::studly($modelDef)) : Str::studly($modelDef);
-        $tableName = $tableName ?? (is_array($modelDef) ? ($modelDef['table'] ?? Str::snake(Str::plural($modelName))) : Str::snake(Str::plural($modelName)));
-
-        $fillable = [];
-        if ($tableName) {
-            // Fetch columns from the definition based on the table name
-            $fillable = $this->getFillableColumns($this->getColumnsForTable($tableName));
+        // determine model name and table
+        if (is_array($modelDef)) {
+            $modelName = $modelDef['name'] ?? Str::studly($modelDef);
+            $tableName = $tableName ?? ($modelDef['table'] ?? Str::snake(Str::plural($modelName)));
+            $relations = $modelDef['relations'] ?? [];
+        } else {
+            $modelName = Str::studly($modelDef);
+            $tableName = $tableName ?? Str::snake(Str::plural($modelName));
+            $relations = [];
         }
-        $fillableCode = $fillable ? "'" . implode("', '", $fillable) . "'" : "/* fillable columns here */";
 
-        // Generate relationships
-        $relations = is_array($modelDef) ? ($modelDef['relations'] ?? []) : [];
+        // get fillable columns from tables definition
+        $columns = $this->getColumnsForTable($tableName);
+        $fillable = $this->getFillableColumns($columns);
+        $fillableCode = !empty($fillable) ? "'" . implode("', '", $fillable) . "'" : "/* fillable columns here */";
+
+        // relationships
         $relationsCode = $this->generateRelationships($relations);
 
-        $stub = $this->files->get(__DIR__ . '/../../resources/stubs/model.stub');
+        // load stub
+        $stubPath = __DIR__ . '/../../resources/stubs/model.stub';
+        if ($this->files->exists($stubPath)) {
+            $stub = $this->files->get($stubPath);
+        } else {
+            $stub = <<<PHP
+<?php
+
+namespace {{namespace}};
+
+use Illuminate\Database\Eloquent\Model;
+
+class {{modelName}} extends Model
+{
+    protected \$table = '{{tableName}}';
+
+    protected \$fillable = [
+        {{fillable}}
+    ];
+
+{{relationships}}
+}
+PHP;
+        }
 
         $content = str_replace(
             ['{{modelName}}', '{{tableName}}', '{{fillable}}', '{{namespace}}', '{{relationships}}'],
@@ -317,37 +448,263 @@ class SystemBuilder
             $stub
         );
 
-        $this->saveFileWithPrompt("$modelPath/{$modelName}.php", $content);
-        $this->info("   - Model created: {$modelName}.php");
+        $this->saveFileWithPrompt("{$modelPath}/{$modelName}.php", $content);
+        $this->info("   - Model created: {$modelName}.php");
     }
 
-    protected function updateWebRoutes(array $routes): void
+    /**
+     * Build relationships code block for a model from an array like ["role:belongsTo", "workers:hasMany"]
+     */
+    protected function generateRelationships(array $relations = []): string
+    {
+        if (empty($relations)) return '';
+
+        $code = '';
+        $modelNamespace = trim($this->getModuleNamespace('\\Models\\'), '\\') . '\\';
+
+        foreach ($relations as $rel) {
+            if (!is_string($rel) || !str_contains($rel, ':')) continue;
+            [$name, $type] = explode(':', $rel, 2);
+            $method = Str::camel($name);
+            $relatedModel = ucfirst(Str::studly(Str::singular($name)));
+
+            switch (Str::lower($type)) {
+                case 'belongsto':
+                    $code .= "    public function {$method}()\n    {\n        return \$this->belongsTo(\\{$modelNamespace}{$relatedModel}::class);\n    }\n\n";
+                    break;
+
+                case 'hasmany':
+                    $code .= "    public function {$method}()\n    {\n        return \$this->hasMany(\\{$modelNamespace}{$relatedModel}::class);\n    }\n\n";
+                    break;
+
+                case 'hasone':
+                    $code .= "    public function {$method}()\n    {\n        return \$this->hasOne(\\{$modelNamespace}{$relatedModel}::class);\n    }\n\n";
+                    break;
+
+                case 'belongstomany':
+                    $code .= "    public function {$method}()\n    {\n        return \$this->belongsToMany(\\{$modelNamespace}{$relatedModel}::class);\n    }\n\n";
+                    break;
+
+                default:
+                    // unknown type: skip
+                    break;
+            }
+        }
+
+        return $code;
+    }
+
+    // --- Controller generation ---
+
+    /**
+     * Generate controller for a given table (returns base resource name used for route generation)
+     */
+    protected function generateController(array $table): ?string
+    {
+        $tableName = $table['name'] ?? ($table['table'] ?? null);
+        if (!$tableName) return null;
+
+        $modelBase = ucfirst(Str::singular($tableName));
+        $controllerName = $modelBase . 'Controller';
+
+        // if user declared same controller in top-level controllers, skip generating duplicate
+        $declaredControllers = array_map(fn($c) => is_array($c) ? ($c['name'] ?? '') : $c, $this->definition['controllers'] ?? []);
+        if (in_array($controllerName, $declaredControllers)) {
+            $this->warn("   - Controller {$controllerName} declared in 'controllers'. Skipping auto-generation here.");
+            return $modelBase; // still return base name for route generation (assuming their controller will exist)
+        }
+
+        // create controller file
+        $this->createControllerFile($controllerName, $modelBase);
+
+        return $modelBase;
+    }
+
+    /**
+     * Create controller file. $controllerDef may be string name or array with name/table/model
+     */
+    protected function createControllerFile(string|array $controllerDef, ?string $modelNameFallback = null): void
+    {
+        $controllerPath = $this->controllerPath();
+        if (!$this->files->isDirectory($controllerPath)) $this->files->makeDirectory($controllerPath, 0755, true);
+
+        $controllerName = is_array($controllerDef) ? ($controllerDef['name'] ?? 'UnnamedController') : $controllerDef;
+        $inferredModel = Str::studly(str_replace('Controller', '', $controllerName));
+        $modelName = is_array($controllerDef) ? ($controllerDef['model'] ?? ($modelNameFallback ?? $inferredModel)) : ($modelNameFallback ?? $inferredModel);
+
+        $modelName = ucfirst($modelName);
+        $modelVariable = Str::camel($modelName);
+        $controllerNamespace = $this->getModuleNamespace('\\Http\\Controllers');
+        $modelNamespace = $this->getModuleNamespace('\\Models');
+
+        // load stub
+        $stubPath = __DIR__ . '/../../resources/stubs/controller.stub';
+        if ($this->files->exists($stubPath)) {
+            $stub = $this->files->get($stubPath);
+        } else {
+            // fallback simple resource controller if stub missing
+            $stub = <<<PHP
+<?php
+
+namespace {{controllerNamespace}};
+
+use {{modelNamespace}}\{{modelName}};
+use Illuminate\Http\Request;
+
+class {{controllerName}} extends Controller
+{
+    public function index()
+    {
+        \$items = {{modelName}}::paginate(10);
+        return view('{{viewFolder}}.index', compact('items'));
+    }
+
+    public function create()
+    {
+        return view('{{viewFolder}}.create');
+    }
+
+    public function store(Request \$request)
+    {
+        \$data = \$request->validate([
+            // TODO: add validation rules
+        ]);
+
+        {{modelName}}::create(\$data);
+
+        return redirect()->route('{{routeName}}.index')->with('success', '{{modelName}} created.');
+    }
+
+    public function edit({{modelName}} \${{modelVariable}})
+    {
+        return view('{{viewFolder}}.edit', compact('{{modelVariable}}'));
+    }
+
+    public function update(Request \$request, {{modelName}} \${{modelVariable}})
+    {
+        \$data = \$request->validate([
+            // TODO: add validation rules
+        ]);
+
+        \${{modelVariable}}->update(\$data);
+
+        return redirect()->route('{{routeName}}.index')->with('success', '{{modelName}} updated.');
+    }
+
+    public function destroy({{modelName}} \${{modelVariable}})
+    {
+        \${{modelVariable}}->delete();
+        return redirect()->route('{{routeName}}.index')->with('success', '{{modelName}} deleted.');
+    }
+}
+PHP;
+        }
+
+        // view folder and route name derived from model lower plural
+        $viewFolder = Str::snake(Str::plural($modelName));
+        $routeName = Str::snake(Str::plural($modelName));
+
+        $content = str_replace(
+            ['{{controllerNamespace}}', '{{modelNamespace}}', '{{controllerName}}', '{{modelName}}', '{{modelVariable}}', '{{viewFolder}}', '{{routeName}}'],
+            [$controllerNamespace, $modelNamespace, $controllerName, $modelName, $modelVariable, $viewFolder, $routeName],
+            $stub
+        );
+
+        $this->saveFileWithPrompt("{$controllerPath}/{$controllerName}.php", $content);
+        $this->info("   - Controller created: {$controllerName}.php");
+    }
+
+    // --- Views generation ---
+
+    protected function generateTableViews(array $table): void
+    {
+        $views = $table['views'] ?? [];
+        foreach ($views as $v) {
+            $this->createViewFile($v, $table['name']);
+        }
+    }
+
+    /**
+     * Create view files given viewDefinition like "admin/users/[index,create,edit]" or "admin/includes/head"
+     */
+    protected function createViewFile(string $viewDefinition, ?string $tableName = null): void
+    {
+        $line = trim($viewDefinition);
+        $filesToCreate = [];
+
+        // folder/[file1,file2]
+        if (preg_match('/(.*?)\/\[(.*?)\]/', $line, $m)) {
+            $folder = trim($m[1], '/');
+            $files = array_map('trim', explode(',', $m[2]));
+            $filesToCreate = array_map(fn($f) => $f . '.blade.php', $files);
+        } else if (strpos($line, '/') !== false) {
+            $parts = explode('/', trim($line, '/'));
+            $folder = array_shift($parts);
+            $filename = implode('/', $parts);
+            $filesToCreate = [Str::endsWith($filename, '.blade.php') ? $filename : $filename . '.blade.php'];
+        } else {
+            $folder = $tableName ? Str::snake($tableName) : 'default';
+            $filesToCreate = [Str::endsWith($line, '.blade.php') ? $line : $line . '.blade.php'];
+        }
+
+        $basePath = $this->basePath . '/resources/views/' . $folder;
+        foreach ($filesToCreate as $file) {
+            $fullPath = $basePath . '/' . $file;
+            $dir = dirname($fullPath);
+            if (!$this->files->isDirectory($dir)) $this->files->makeDirectory($dir, 0755, true);
+
+            $stubPath = __DIR__ . '/../../resources/stubs/view.stub';
+            if ($this->files->exists($stubPath)) {
+                $stub = $this->files->get($stubPath);
+                $content = str_replace('{{tableName}}', $tableName ?? '', $stub);
+            } else {
+                // fallback minimal template
+                $content = "<!-- Auto-generated view for {$folder}/{$file} -->\n<div>\n    <h1>" . ucfirst(str_replace('.blade.php', '', $file)) . "</h1>\n</div>\n";
+            }
+
+            $this->saveFileWithPrompt($fullPath, $content);
+            $this->info("   - View created: /resources/views/{$folder}/{$file}");
+        }
+    }
+
+    // --- Routes update logic ---
+
+    /**
+     * Update routes/web.php: asks user if auto-generated block exists: Replace / Merge / Skip.
+     * For Merge: append only new resource route lines that are not already present in the auto-generated block.
+     *
+     * @param array $controllersBaseNames e.g., ['User', 'Task']
+     */
+    protected function updateWebRoutes(array $controllersBaseNames): void
     {
         $webFile = $this->basePath . '/routes/web.php';
-
         if (!$this->files->exists($webFile)) {
-            $this->error("web.php not found. Skipping...");
+            $this->error("web.php not found at {$webFile}. Skipping route update.");
             return;
         }
 
         $existing = $this->files->get($webFile);
 
-        $routeBlock = "\n\n// -----------------------------------------------\n";
-        $routeBlock .= "// AUTO-GENERATED ROUTES BY SystemBuilder PACKAGE\n";
-        $routeBlock .= "// You can modify them as needed.\n";
-        $routeBlock .= "// -----------------------------------------------\n\n";
+        $blockHeader = "// -----------------------------------------------\n";
+        $blockHeader .= "// AUTO-GENERATED ROUTES BY SystemBuilder PACKAGE\n";
+        $blockHeader .= "// You can modify them as needed.\n";
+        $blockHeader .= "// -----------------------------------------------\n";
 
-        foreach ($routes as $route) {
-            $controller = Str::studly($route) . "Controller";
-            // Uses the full namespace based on module setup
-            $controllerClass = $this->getModuleNamespace('\\Http\\Controllers\\') . $controller;
-            $routeBlock .= "Route::resource('" . Str::snake(Str::plural($route)) . "', \\{$controllerClass}::class);\n";
+        // build lines to add
+        $linesToAdd = [];
+        foreach ($controllersBaseNames as $base) {
+            $resource = Str::snake(Str::plural($base));
+            $controllerClass = $this->getModuleNamespace('\\Http\\Controllers\\') . $base . 'Controller';
+            $linesToAdd[] = "Route::resource('{$resource}', \\{$controllerClass}::class);";
         }
 
-        // if file already contains generated block -> ask user
-        if (strpos($existing, 'AUTO-GENERATED ROUTES') !== false && !$this->force) {
+        // detect existing auto-generated block
+        $autoBlockExists = Str::contains($existing, 'AUTO-GENERATED ROUTES BY SystemBuilder PACKAGE');
+
+        if ($autoBlockExists && !$this->force) {
+            // ask user
             $choice = $this->choice(
-                "⚠ web.php already has auto-generated routes. What do you want to do?",
+                "web.php already contains an auto-generated route block. What do you want to do?",
                 ['Replace', 'Merge', 'Skip'],
                 1
             );
@@ -358,203 +715,66 @@ class SystemBuilder
             }
 
             if ($choice === 'Replace') {
-                // remove old block (non-greedy match until another Route:: is found or end of file)
-                $existing = preg_replace('/\/\/ -----------------------------------------------(.|\s)*?(\/\/ -----------------------------------------------\s*)*\n(Route::.*|)/m', '', $existing);
+                // remove the old block entirely (non-greedy between header and next blank line or file end)
+                $existing = preg_replace('/\/\/ -----------------------------------------------(.|\s)*?\/\/ -----------------------------------------------\s*/', '', $existing);
+                // new content becomes existing + new block
+                $final = trim($existing) . "\n\n" . $blockHeader . implode("\n", $linesToAdd) . "\n";
+                $this->files->put($webFile, $final);
+                $this->info("✅ web.php replaced auto-generated route block.");
+                return;
             }
-        }
 
-        // Append block
-        $finalContent = $existing . $routeBlock;
+            if ($choice === 'Merge') {
+                // extract existing auto block content if present
+                preg_match('/\/\/ -----------------------------------------------(.|\s)*?\/\/ -----------------------------------------------\s*/', $existing, $matches);
+                $existingBlock = $matches[0] ?? '';
 
-        $this->files->put($webFile, $finalContent);
-
-        $this->info("✅ Routes updated in web.php");
-    }
-
-
-    protected function generateRelationships(array $relations): string
-    {
-        $code = '';
-        $modelNamespace = $this->getModuleNamespace('\\Models\\');
-
-        foreach ($relations as $rel) {
-            // Format: "relationName:type"
-            if (!str_contains($rel, ':')) continue;
-            [$name, $type] = explode(':', $rel);
-
-            $methodName = Str::camel($name);
-            $modelClass = '';
-
-            switch (strtolower($type)) {
-                case 'belongsto':
-                    $modelClass = ucfirst(Str::studly(Str::singular($name)));
-                    $code .= "    public function {$methodName}()\n    {\n        return \$this->belongsTo(\\{$modelNamespace}{$modelClass}::class);\n    }\n\n";
-                    break;
-                case 'hasmany':
-                    $modelClass = ucfirst(Str::studly(Str::singular($name)));
-                    $code .= "    public function {$methodName}()\n    {\n        return \$this->hasMany(\\{$modelNamespace}{$modelClass}::class);\n    }\n\n";
-                    break;
-                case 'hasone':
-                    $modelClass = ucfirst(Str::studly(Str::singular($name)));
-                    $code .= "    public function {$methodName}()\n    {\n        return \$this->hasOne(\\{$modelNamespace}{$modelClass}::class);\n    }\n\n";
-                    break;
-                case 'belongstomany':
-                    $modelClass = ucfirst(Str::studly(Str::singular($name)));
-                    $code .= "    public function {$methodName}()\n    {\n        return \$this->belongsToMany(\\{$modelNamespace}{$modelClass}::class);\n    }\n\n";
-                    break;
-            }
-        }
-
-        return $code;
-    }
-
-
-    /**
-     * Generates a controller based on a table definition and returns its name.
-     *
-     * @param array $table
-     * @return string|null The name of the controller generated or null if skipped.
-     * @throws \Exception
-     */
-    protected function generateController(array $table): ?string
-    {
-        $tableBasedName = ucfirst(Str::singular($table['name'])) . 'Controller';
-        $singularTableName = ucfirst(Str::singular($table['name']));
-        $userDefinedControllers = $this->definition['controllers'] ?? [];
-
-        $controllerToGenerate = $tableBasedName;
-        $createBoth = false;
-        $skipped = false;
-
-        // Check for potential name conflict/overlap in the user-defined controllers list
-        $userDefinedNames = array_map(fn($c) => is_array($c) ? ($c['name'] ?? '') : $c, $userDefinedControllers);
-
-        if (in_array($tableBasedName, $userDefinedNames)) {
-            $this->warn("⚠️  Controller '{$tableBasedName}' is implied by table '{$table['name']}' AND explicitly listed in 'controllers'. Skipping table-based creation.");
-            return null; // It will be created by generateGeneralComponents later
-        }
-
-        // Check if table's implied controller name matches any user-defined controller name
-        foreach ($userDefinedNames as $userControllerName) {
-            if ($userControllerName === $tableBasedName) {
-                $choice = $this->ask("Table '{$table['name']}' implies controller '{$tableBasedName}'. You defined '{$userControllerName}' in JSON. Use JSON name, Table name, or Both? (json/table/both)", 'table');
-
-                if (strtolower($choice) === 'json') {
-                    $controllerToGenerate = $userControllerName;
-                } else if (strtolower($choice) === 'both') {
-                    $createBoth = true;
+                // compute which lines are missing from existingBlock
+                $existingLines = array_filter(array_map('trim', explode("\n", $existingBlock)));
+                $existingRoutes = [];
+                foreach ($existingLines as $l) {
+                    if (Str::startsWith(trim($l), 'Route::resource')) {
+                        $existingRoutes[] = trim($l, " \t\n\r\0\x0B;");
+                    }
                 }
-                // else: controllerToGenerate remains tableBasedName
-                break;
+
+                $toAppend = [];
+                foreach ($linesToAdd as $ln) {
+                    $lnTrim = trim($ln, " \t\n\r\0\x0B;");
+                    if (!in_array($lnTrim, $existingRoutes)) {
+                        $toAppend[] = $ln;
+                    }
+                }
+
+                if (empty($toAppend)) {
+                    $this->info("No new routes to merge — web.php already contains them.");
+                    return;
+                }
+
+                // Append new routes right after the existing block if exists, otherwise append a new block
+                if ($existingBlock) {
+                    $final = str_replace($existingBlock, rtrim($existingBlock) . "\n" . implode("\n", $toAppend) . "\n", $existing);
+                } else {
+                    $final = trim($existing) . "\n\n" . $blockHeader . implode("\n", array_merge($existingRoutes, $toAppend)) . "\n";
+                }
+
+                $this->files->put($webFile, $final);
+                $this->info("✅ Routes merged into web.php (added " . count($toAppend) . " new routes).");
+                return;
             }
         }
 
-        $this->createControllerFile($controllerToGenerate, $singularTableName);
-
-        if ($createBoth && $controllerToGenerate !== $tableBasedName) {
-            $this->createControllerFile($tableBasedName, $singularTableName);
-            return $tableBasedName;
-        }
-
-        return str_replace('Controller', '', $controllerToGenerate); // Return base name for route generation
+        // default behavior: append new block if not found or --force
+        $final = rtrim($existing) . "\n\n" . $blockHeader . implode("\n", $linesToAdd) . "\n";
+        $this->files->put($webFile, $final);
+        $this->info("✅ Routes appended to web.php");
     }
 
-    protected function createControllerFile(string|array $controllerDef, ?string $modelNameFallback = null): void
-    {
-        $controllerPath = $this->controllerPath();
-        if (!$this->files->isDirectory($controllerPath)) $this->files->makeDirectory($controllerPath, 0755, true);
-
-        // Support JSON object with table/model
-        $controllerName = is_array($controllerDef) ? ($controllerDef['name'] ?? 'UnknownController') : $controllerDef;
-        // Strip 'Controller' suffix if present, then get Studly case for model
-        $inferredModelName = Str::studly(str_replace('Controller', '', $controllerName));
-
-        $modelName = is_array($controllerDef) ? ($controllerDef['model'] ?? $modelNameFallback ?? $inferredModelName) : ($modelNameFallback ?? $inferredModelName);
-
-        $modelName = ucfirst($modelName); // Ensure studly case
-        $modelVariable = Str::camel($modelName);
-        $controllerNamespace = $this->getModuleNamespace('\\Http\\Controllers');
-        $modelNamespace = $this->getModuleNamespace('\\Models');
-
-        // Load controller stub
-        $stubFile = __DIR__ . '/../../resources/stubs/controller.stub';
-        if (!$this->files->exists($stubFile)) {
-            throw new \Exception("Controller stub not found at $stubFile");
-        }
-
-        $stub = $this->files->get($stubFile);
-
-        // Replace placeholders
-        $content = str_replace(
-            ['{{controllerName}}', '{{modelName}}', '{{modelVariable}}', '{{controllerNamespace}}', '{{modelNamespace}}'],
-            [$controllerName, $modelName, $modelVariable, $controllerNamespace, $modelNamespace],
-            $stub
-        );
-
-        $this->saveFileWithPrompt("$controllerPath/{$controllerName}.php", $content);
-        $this->info("   - Controller created: {$controllerName}.php");
-    }
-
-
-    // Generates views listed directly inside the 'tables' array
-    protected function generateTableViews(array $table): void
-    {
-        $views = $table['views'] ?? [];
-        foreach ($views as $v) {
-            $this->createViewFile($v, $table['name']);
-        }
-    }
-
-    // Generates general views listed in the top-level 'views' array
-    protected function createViewFile(string $viewDefinition, ?string $tableName = null): void
-    {
-        $line = trim($viewDefinition);
-        $filesToCreate = [];
-
-        // Determine base path for the view: resources/views/{folder}/
-        $folder = null;
-        $fileList = $line;
-
-        // Try to parse format: folder/[file1,file2]
-        if (preg_match('/(.*?)\/\[(.*?)\]/', $line, $matches)) {
-            $folder = trim($matches[1], '/');
-            $files = array_map('trim', explode(',', $matches[2]));
-            $filesToCreate = array_map(fn($f) => $f . '.blade.php', $files);
-        } // Try to parse format: folder/filename (treat filename as index if no brackets)
-        else if (strpos($line, '/') !== false) {
-            $parts = explode('/', trim($line, '/'));
-            $folder = $parts[0];
-            $filesToCreate = [end($parts) . '.blade.php'];
-        } // Simple file case: index or file.blade.php
-        else {
-            $filesToCreate = [Str::endsWith($line, '.blade.php') ? $line : $line . '.blade.php'];
-            $folder = $tableName ?? 'default';
-        }
-
-        // Final view path construction
-        $basePath = $this->basePath . '/resources/views/' . $folder;
-
-        foreach ($filesToCreate as $file) {
-            $fullPath = $basePath . '/' . $file;
-            $dir = dirname($fullPath);
-
-            if (!$this->files->isDirectory($dir)) $this->files->makeDirectory($dir, 0755, true);
-
-            $stub = $this->files->get(__DIR__ . '/../../resources/stubs/view.stub');
-            $content = str_replace('{{tableName}}', $tableName ?? 'N/A', $stub);
-
-            $this->saveFileWithPrompt($fullPath, $content);
-            $this->info("   - View created: /resources/views/{$folder}/{$file}");
-        }
-    }
-
-
-    // --- Helper Methods ---
+    // --- Helpers: columns / fillable / file saving / prompting ---
 
     private function getColumnsForTable(string $tableName): array
     {
         foreach ($this->definition['tables'] as $table) {
-            // Check against both 'name' and 'table' if available, as 'name' is often the final table name.
             if (($table['name'] ?? $table['table'] ?? null) === $tableName) {
                 return $table['columns'] ?? [];
             }
@@ -564,107 +784,13 @@ class SystemBuilder
 
     private function getFillableColumns(array $columns): array
     {
-        $fillable = [];
-        foreach ($columns as $col) {
-            // Exclude common Laravel-handled columns from $fillable, including those used for foreign keys if they are just IDs.
-            if (!in_array($col['name'], ['id', 'created_at', 'updated_at', 'deleted_at'])) {
-                $fillable[] = $col['name']; // Store name without quotes, they are added in createModelFile
-            }
+        $out = [];
+        foreach ($columns as $c) {
+            if (empty($c['name'])) continue;
+            if (in_array($c['name'], ['id', 'created_at', 'updated_at', 'deleted_at'])) continue;
+            $out[] = $c['name'];
         }
-        return $fillable;
-    }
-
-    protected function generateColumns(array $columns): string
-    {
-        $lines = '';
-        $existingCols = [];
-
-        foreach ($columns as $col) {
-
-            // Column name must exist
-            if (!isset($col['name'])) {
-                $this->warn("⛔ Skipping column definition with missing name.");
-                continue;
-            }
-
-            if (in_array($col['name'], $existingCols)) {
-                $this->warn("⛔ Skipping duplicate column: {$col['name']}");
-                continue;
-            }
-
-            $existingCols[] = $col['name'];
-
-            // Skip default timestamps as they are handled by {{timestamps}}
-            if (in_array($col['name'], ['created_at', 'updated_at'])) {
-                $this->warn("⛔ Skipping explicit timestamp column '{$col['name']}'. Use `timestamps: false` to disable default timestamps.");
-                continue;
-            }
-
-            if (isset($col['type']) && in_array($col['type'], ['id', 'bigIncrements', 'increments'])) {
-                if ($col['type'] === 'id') {
-                    $lines .= " \$table->id();\n";
-                }
-                continue;
-            }
-
-            $type = $col['type'] ?? 'string';
-            $name = $col['name'];
-
-            $base = "\$table->{$type}('{$name}'";
-
-            if (isset($col['length']) && in_array($type, ['string', 'char', 'varchar', 'decimal', 'float'])) {
-                // If the type is decimal or float, we need precision and scale
-                if (in_array($type, ['decimal', 'float']) && isset($col['scale'])) {
-                    $base .= ", {$col['length']}, {$col['scale']}";
-                } else {
-                    $base .= ", {$col['length']}";
-                }
-            }
-
-            if ($type === 'enum' && !empty($col['values']) && is_array($col['values'])) {
-                $vals = array_map(fn($v) => "'" . addslashes($v) . "'", $col['values']);
-                $base = "\$table->enum('{$name}', [" . implode(', ', $vals) . "])";
-            } else {
-                $base .= ")";
-            }
-
-            if (!empty($col['nullable'])) $base .= "->nullable()";
-            if (!empty($col['unique'])) $base .= "->unique()";
-            if (!empty($col['index'])) $base .= "->index()";
-
-            if (isset($col['default'])) {
-                $default = is_numeric($col['default']) ? $col['default'] : "'" . addslashes($col['default']) . "'";
-                $base .= "->default({$default})";
-            }
-
-            if (!empty($col['comment'])) $base .= "->comment('" . addslashes($col['comment']) . "')";
-
-            $lines .= " $base;\n";
-        }
-
-        return $lines;
-    }
-
-    protected function generateForeignKeys(array $columns): string
-    {
-        $lines = '';
-
-        foreach ($columns as $col) {
-            if (!empty($col['foreign'])) {
-                $fk = $col['foreign'];
-                $columnName = $col['name'];
-                $on = $fk['on'] ?? null;
-                $ref = $fk['references'] ?? 'id';
-
-                if ($on) {
-                    $lines .= " \$table->foreign('{$columnName}')->references('{$ref}')->on('{$on}')";
-                    if (!empty($fk['onDelete'])) $lines .= "->onDelete('{$fk['onDelete']}')";
-                    if (!empty($fk['onUpdate'])) $lines .= "->onUpdate('{$fk['onUpdate']}')";
-                    $lines .= ";\n";
-                }
-            }
-        }
-        return $lines;
+        return $out;
     }
 
     protected function askPermission(string $message): bool
@@ -672,8 +798,7 @@ class SystemBuilder
         if ($this->force || $this->overwriteAll) return true;
         if ($this->skipAll) return false;
 
-        $answer = $this->ask("⚠️  $message (y/n/all/skip-all)", 'n');
-
+        $answer = $this->ask("⚠️  $message (y/n/all/skip-all)", 'n');
         if ($answer === 'all') {
             $this->overwriteAll = true;
             return true;
@@ -682,27 +807,31 @@ class SystemBuilder
             $this->skipAll = true;
             return false;
         }
-
         return strtolower($answer) === 'y';
     }
 
+    /**
+     * Save file but prompt if it already exists (unless force).
+     */
     protected function saveFileWithPrompt(string $path, string $content): void
     {
+        // ensure directory exists
+        $dir = dirname($path);
+        if (!$this->files->isDirectory($dir)) {
+            $this->files->makeDirectory($dir, 0755, true);
+        }
+
         if ($this->files->exists($path)) {
             if (!$this->askPermission("File already exists: " . basename($path) . ". Replace?")) {
+                $this->info("Skipped: " . basename($path));
                 return;
             }
         }
 
         try {
-            $dir = dirname($path);
-            if (!$this->files->isDirectory($dir)) {
-                $this->files->makeDirectory($dir, 0755, true);
-            }
-
             $this->files->put($path, $content);
-        } catch (\Exception $e) {
-            $this->error("Failed to write file {$path}: " . $e->getMessage());
+        } catch (\Throwable $e) {
+            $this->error("Failed to write file {$path}: {$e->getMessage()}");
         }
     }
 }
