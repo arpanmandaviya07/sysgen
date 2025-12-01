@@ -234,26 +234,72 @@ class SystemBuilder
         $this->createModelFile($modelName, $table['name']);
     }
 
-    protected function createModelFile(string $modelName, ?string $tableName = null): void
+    protected function createModelFile(string $modelDef, ?string $tableName = null): void
     {
         $modelPath = $this->modelPath();
         if (!$this->files->isDirectory($modelPath)) $this->files->makeDirectory($modelPath, 0755, true);
 
         $namespace = $this->getModuleNamespace('\\Models');
-        $fillable = $tableName ? $this->getFillableColumns($this->getColumnsForTable($tableName)) : [];
-        $fillableCode = $fillable ? implode(', ', $fillable) : "/* fillable columns here */";
+
+        // Determine model name and table
+        $modelName = $modelDef['name'] ?? Str::studly($modelDef);
+        $tableName = $tableName ?? ($modelDef['table'] ?? Str::snake(Str::plural($modelName)));
+
+        $fillable = [];
+        if ($tableName) {
+            $fillable = $this->getFillableColumns($this->getColumnsForTable($tableName));
+        }
+        $fillableCode = $fillable ? implode(",\n        ", $fillable) : "/* fillable columns here */";
+
+        // Generate relationships
+        $relationsCode = $this->generateRelationships($modelDef['relations'] ?? []);
 
         $stub = $this->files->get(__DIR__ . '/../../resources/stubs/model.stub');
 
         $content = str_replace(
-            ['{{modelName}}', '{{tableName}}', '{{fillable}}', '{{namespace}}'],
-            [$modelName, $tableName ?? Str::snake(Str::plural($modelName)), $fillableCode, $namespace],
+            ['{{modelName}}', '{{tableName}}', '{{fillable}}', '{{namespace}}', '{{relationships}}'],
+            [$modelName, $tableName, $fillableCode, $namespace, $relationsCode],
             $stub
         );
 
         $this->saveFileWithPrompt("$modelPath/{$modelName}.php", $content);
         $this->info("   - Model created: {$modelName}.php");
     }
+
+    protected function generateRelationships(array $relations): string
+    {
+        $code = '';
+
+        foreach ($relations as $rel) {
+            // Format: "relationName:type"
+            [$name, $type] = explode(':', $rel);
+
+            $methodName = Str::camel($name);
+
+            switch (strtolower($type)) {
+                case 'belongsto':
+                    $code .= "    public function {$methodName}()\n    {\n        return \$this->belongsTo("
+                        . ucfirst(Str::studly($name)) . "::class);\n    }\n\n";
+                    break;
+                case 'hasmany':
+                    $code .= "    public function {$methodName}()\n    {\n        return \$this->hasMany("
+                        . ucfirst(Str::studly(Str::singular($name))) . "::class);\n    }\n\n";
+                    break;
+                case 'hasone':
+                    $code .= "    public function {$methodName}()\n    {\n        return \$this->hasOne("
+                        . ucfirst(Str::studly($name)) . "::class);\n    }\n\n";
+                    break;
+                case 'belongstomany':
+                    $code .= "    public function {$methodName}()\n    {\n        return \$this->belongsToMany("
+                        . ucfirst(Str::studly(Str::singular($name))) . "::class);\n    }\n\n";
+                    break;
+            }
+        }
+
+        return $code;
+    }
+
+
 
     protected function generateController(array $table): void
     {
@@ -292,37 +338,39 @@ class SystemBuilder
         }
     }
 
-    protected function createControllerFile(string $controllerName, ?string $modelName = null): void
+    protected function createControllerFile(string|array $controllerDef, ?string $modelNameFallback = null): void
     {
         $controllerPath = $this->controllerPath();
         if (!$this->files->isDirectory($controllerPath)) $this->files->makeDirectory($controllerPath, 0755, true);
 
-        $modelName = $modelName ?? Str::replace('Controller', '', $controllerName);
-        $modelName = ucfirst($modelName); // Ensure Model name is StudlyCase
+        // Support JSON object with table/model
+        $controllerName = is_array($controllerDef) ? ($controllerDef['name'] ?? 'UnknownController') : $controllerDef;
+        $modelName = is_array($controllerDef) ? ($controllerDef['model'] ?? $modelNameFallback) : $modelNameFallback;
 
+        $modelName = ucfirst($modelName); // Ensure studly case
+        $modelVariable = Str::camel($modelName);
         $controllerNamespace = $this->getModuleNamespace('\\Http\\Controllers');
         $modelNamespace = $this->getModuleNamespace('\\Models');
 
-        $isResource = str_ends_with(strtolower($controllerName), 'controller'); // Assume resource for simplicity if it ends in Controller
-        $stubName = $isResource ? 'controller.resource.stub' : 'controller.stub';
-
-        $stubFile = __DIR__ . "/../../resources/stubs/{$stubName}";
+        // Load controller stub
+        $stubFile = __DIR__ . '/../../resources/stubs/controller.stub';
         if (!$this->files->exists($stubFile)) {
-            $stubFile = __DIR__ . '/../../resources/stubs/controller.stub';
-            $isResource = false;
+            throw new \Exception("Controller stub not found at $stubFile");
         }
 
         $stub = $this->files->get($stubFile);
 
+        // Replace placeholders
         $content = str_replace(
             ['{{controllerName}}', '{{modelName}}', '{{modelVariable}}', '{{controllerNamespace}}', '{{modelNamespace}}'],
-            [$controllerName, $modelName, Str::camel($modelName), $controllerNamespace, $modelNamespace],
+            [$controllerName, $modelName, $modelVariable, $controllerNamespace, $modelNamespace],
             $stub
         );
 
         $this->saveFileWithPrompt("$controllerPath/{$controllerName}.php", $content);
-        $this->info("   - Controller created: {$controllerName}.php" . ($isResource ? ' (Resource)' : ''));
+        $this->info("   - Controller created: {$controllerName}.php");
     }
+
 
     // Generates views listed directly inside the 'tables' array
     protected function generateTableViews(array $table): void
