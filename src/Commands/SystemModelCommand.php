@@ -1,11 +1,12 @@
 <?php
 
-namespace App\Console\Commands;
+namespace Arpanmandaviya\SystemBuilder\Commands;
 
 use Illuminate\Console\Command;
 use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Str;
 use Illuminate\Support\Facades\File;
+use Arpanmandaviya\SystemBuilder\Builders\SystemBuilder;
 
 class SystemModelCommand extends Command
 {
