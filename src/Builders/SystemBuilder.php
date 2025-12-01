@@ -354,19 +354,19 @@ class SystemBuilder
             switch (strtolower($type)) {
                 case 'belongsto':
                     $modelClass = ucfirst(Str::studly(Str::singular($name)));
-                    $code .= "    public function {$methodName}()\n{\nreturn \$this->belongsTo(\\{$modelNamespace}{$modelClass}::class);\n    }\n\n";
+                    $code .= "public function {$methodName}()\n{\nreturn \$this->belongsTo(\\{$modelNamespace}{$modelClass}::class);\n    }\n\n";
                     break;
                 case 'hasmany':
                     $modelClass = ucfirst(Str::studly(Str::singular($name)));
-                    $code .= "    public function {$methodName}()\n {\nreturn \$this->hasMany(\\{$modelNamespace}{$modelClass}::class);\n    }\n\n";
+                    $code .= "public function {$methodName}()\n {\nreturn \$this->hasMany(\\{$modelNamespace}{$modelClass}::class);\n    }\n\n";
                     break;
                 case 'hasone':
                     $modelClass = ucfirst(Str::studly(Str::singular($name)));
-                    $code .= "    public function {$methodName}()\n{\nreturn \$this->hasOne(\\{$modelNamespace}{$modelClass}::class);\n    }\n\n";
+                    $code .= "public function {$methodName}()\n{\nreturn \$this->hasOne(\\{$modelNamespace}{$modelClass}::class);\n    }\n\n";
                     break;
                 case 'belongstomany':
                     $modelClass = ucfirst(Str::studly(Str::singular($name)));
-                    $code .= "    public function {$methodName}()\n {\n return \$this->belongsToMany(\\{$modelNamespace}{$modelClass}::class);\n    }\n\n";
+                    $code .= "public function {$methodName}()\n {\n return \$this->belongsToMany(\\{$modelNamespace}{$modelClass}::class);\n    }\n\n";
                     break;
             }
         }
