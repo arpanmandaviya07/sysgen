@@ -34,6 +34,7 @@
 	],
 	"views": [
 		"admin/includes/[head]",
-		"admin/partials/[sidebar,navbar,footer,script]"
+		"admin/partials/[sidebar,navbar,footer,script]",
+		"File FormResources/System.json"
 	]
 }
