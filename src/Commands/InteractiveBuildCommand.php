@@ -8,178 +8,182 @@ use Illuminate\Support\Str;
 
 class InteractiveBuildCommand extends Command
 {
-    // Update the signature to the new interactive one
-    protected $signature = 'system:interactive
-                            {--module= : The name of the module/folder to generate files into (e.g., Invoices)}
-                            {--force : Overwrite existing files without asking}';
+    protected $signature = 'system:migrate
+                        {--module= : The name of the module or folder (Example: Blog)}
+                        {--force : Overwrite existing files without confirmation}
+                        {--help : View detailed usage instructions}
+                        ';
 
-    protected $description = 'Interactively generate migrations, models, controllers, and views.';
+    protected $description = '⚡ Interactive mode to generate Migrations, Models, Controllers and Views with relationships.';
 
     public function handle()
     {
-        $this->info('🚀 Starting Interactive System Builder...');
+        $this->info("\n🚀 Welcome to Laravel System Interactive Builder\n--------------------------------------------------");
 
         $module = $this->option('module');
+
         if ($module && !preg_match('/^[a-zA-Z]+$/', $module)) {
-            $this->error("Invalid module name. Use only letters (e.g., Invoices).");
+            $this->error("❌ Module name must contain only letters (Example: CRM, HRM, Billing).");
             return 1;
         }
 
-        // 1. Get Table Definition
         $tables = $this->askForTables();
 
-        if (empty($tables)) {
-            $this->info("No tables defined. Operation cancelled.");
+        if (!$tables) {
+            $this->warn("⚠️ No tables defined. Exiting...");
             return 0;
         }
 
-        // 2. Prepare Definition for Builder
-        $definition = ['tables' => $tables];
+        // If user only wants help, show formatted data table and exit
+        if ($this->option('help')) {
 
-        // 3. Build System
+            $this->info("📌 System Migration Builder — Data Type Reference\n");
+
+            $headers = ['Data Type', 'Laravel Blueprint', 'Notes / Behavior'];
+            $rows = [
+                ['id', '->id()', 'Auto-increment | Primary Key'],
+                ['string', '->string(name, length)', 'Default length: 255'],
+                ['integer', '->integer(name)', 'Signed integer'],
+                ['bigInteger', '->bigInteger(name)', 'Use this when column contains `_id`'],
+                ['unsignedBigInteger', '->unsignedBigInteger(name)', 'Auto-applied if column has `_id`'],
+                ['text', '->text(name)', 'Large text content'],
+                ['boolean', '->boolean(name)', 'true / false'],
+                ['float', '->float(name, total, places)', 'Numeric with decimals'],
+                ['json', '->json(name)', 'Stores JSON array / object'],
+                ['date', '->date(name)', 'Only date'],
+                ['dateTime', '->dateTime(name)', 'Date + Time'],
+            ];
+
+            $this->table($headers, $rows);
+
+            $this->line("\n🔧 Required Setup Steps:");
+            $this->line("  1. Name your module using --module");
+            $this->line("  2. Define tables");
+            $this->line("  3. Define columns");
+            $this->line("  4. System will auto-detect foreign key if column ends with `_id`\n");
+
+            $this->comment("👉 Example:");
+            $this->comment("   php artisan system:migrate --module=Invoices\n");
+
+            return Command::SUCCESS;
+        }
+
+
         try {
-            // Instantiate the builder and pass the Command's output for professional logging
-            $builder = new SystemBuilder($definition, base_path(), $this->option('force'), $module);
-            $builder->setOutput($this->output); // Inject the output for $this->info() etc.
-
+            $builder = new SystemBuilder(['tables' => $tables], base_path(), $this->option('force'), $module);
+            $builder->setOutput($this->output);
             $builder->build();
 
-            $this->info('✅ All files generated successfully!');
-
-            // Helpful next step
-            $this->comment('✨ Don\'t forget to run "php artisan migrate" and setup your routes.');
-
+            $this->info("\n🎉 System generation completed successfully!");
+            $this->comment("👉 Run: php artisan migrate");
+            $this->comment("👉 Run: php artisan system:migrate --help command for help");
             return 0;
+
         } catch (\Exception $e) {
-            $this->error('An unexpected error occurred during build: ' . $e->getMessage());
+            $this->error("❌ Error: {$e->getMessage()}");
             return 1;
         }
     }
 
-    /**
-     * Guides the user through defining tables, columns, and foreign keys.
-     * @return array
-     */
     protected function askForTables(): array
     {
         $tables = [];
 
-        do {
-            $tableName = $this->ask("Table name (e.g., posts, users, or leave empty to finish)", '');
+        while (true) {
+            $tableName = Str::snake($this->ask("\n📌 Enter table name (leave empty to stop):"));
 
-            if (empty($tableName)) {
-                break;
+            if (!$tableName) break;
+
+            if (!preg_match('/^[a-zA-Z_]+$/', $tableName)) {
+                $this->error("❌ Invalid name. Only letters and underscores allowed.");
+                continue;
             }
 
-            $tableName = Str::snake($tableName); // Ensure snake_case
+            $this->line("🛠 Building: {$tableName}");
 
-            $table = [
+            $tables[] = [
                 'name' => $tableName,
                 'columns' => $this->askForColumns($tableName),
-                'timestamps' => $this->confirm("Add timestamps (created_at, updated_at)?", true)
+                'timestamps' => $this->confirm("Add timestamps? (created_at, updated_at)", true),
             ];
-
-            $tables[] = $table;
-        } while (true);
+        }
 
         return $tables;
     }
 
-    /**
-     * Guides the user through defining columns.
-     * @param string $tableName
-     * @return array
-     */
     protected function askForColumns(string $tableName): array
     {
-        $this->comment("Defining columns for table: {$tableName}");
         $columns = [];
-        $hasPrimary = false;
+        $hasPrimaryKey = false;
 
-        // Default primary key for a professional feel
-        if ($this->confirm("Add default primary key (\$table->id())?", true)) {
-            $columns[] = ['name' => 'id', 'type' => 'id'];
-            $hasPrimary = true;
+        if ($this->confirm("Add default ID primary key? (\$table->id())", true)) {
+            $columns[] = ['name' => 'id', 'type' => 'id', 'attributes' => []];
+            $hasPrimaryKey = true;
         }
 
-        do {
-            $colName = $this->ask("Column name (e.g., title, user_id, or leave empty to finish columns)", '');
+        while (true) {
+            $colName = Str::snake($this->ask("\n➡ Column name (blank to continue):"));
 
-            if (empty($colName)) {
-                break;
+            if (!$colName) break;
+
+            if (!preg_match('/^[a-zA-Z_]+$/', $colName)) {
+                $this->error("❌ Invalid name. Only letters and underscores allowed.");
+                continue;
             }
 
-            // Standardize column name
-            $colName = Str::snake($colName);
+            // Auto-detect FK
+            $isForeignKey = Str::endsWith($colName, '_id');
+            $defaultType = $isForeignKey ? 'unsignedBigInteger' : 'string';
 
             $type = $this->choice(
-                "Select data type for '{$colName}'",
+                "📌 Type for '{$colName}':",
                 [
-                    'string', 'integer', 'text', 'bigInteger',
-                    'boolean', 'date', 'dateTime', 'float', 'json'
+                    'string', 'text', 'integer', 'bigInteger', 'unsignedBigInteger',
+                    'boolean', 'date', 'dateTime', 'float', 'double', 'json',
                 ],
-                0 // Default choice is 'string'
+                $defaultType
             );
 
             $column = [
                 'name' => $colName,
                 'type' => $type,
+                'attributes' => [],
             ];
 
-            // Ask for additional modifiers
             if ($type === 'string') {
-                $column['length'] = (int) $this->ask("String length (optional, e.g., 255)", 255);
-            }
-            if ($this->confirm("Is '{$colName}' nullable?", false)) {
-                $column['nullable'] = true;
-            }
-            if ($this->confirm("Is '{$colName}' unique?", false)) {
-                $column['unique'] = true;
+                $column['length'] = (int)$this->ask("Length? (default 255)", 255);
             }
 
-            // Ask about foreign key for professional relational schema
-            if ($this->confirm("Is '{$colName}' a foreign key?", false)) {
+            $column['nullable'] = $this->confirm("Nullable?", false);
+            $column['unique'] = $this->confirm("Unique?", false);
+
+            if ($this->confirm("Add default value?", false)) {
+                $column['default'] = $this->ask("Default value:");
+            }
+
+            if ($this->confirm("Add column comment?", false)) {
+                $column['comment'] = $this->ask("Enter comment:");
+            }
+
+            if ($isForeignKey || $this->confirm("Is this a Foreign Key?", false)) {
                 $column['foreign'] = $this->askForForeignKey($colName);
             }
 
             $columns[] = $column;
-
-        } while (true);
+        }
 
         return $columns;
     }
 
-    /**
-     * Guides the user through defining a foreign key relationship.
-     * @param string $columnName
-     * @return array
-     */
     protected function askForForeignKey(string $columnName): array
     {
-        $fk = [];
+        $tableGuess = Str::plural(str_replace('_id', '', $columnName));
 
-        $fk['on'] = $this->ask("References table (e.g., users)");
-        $fk['references'] = $this->ask("References column (e.g., id)", 'id');
-
-        // Professional default cascade options
-        $deleteAction = $this->choice(
-            "On Delete action",
-            ['no action', 'restrict', 'cascade', 'set null'],
-            1 // Default is 'restrict'
-        );
-        if ($deleteAction !== 'no action') {
-            $fk['onDelete'] = $deleteAction;
-        }
-
-        $updateAction = $this->choice(
-            "On Update action",
-            ['no action', 'restrict', 'cascade', 'set null'],
-            1 // Default is 'restrict'
-        );
-        if ($updateAction !== 'no action') {
-            $fk['onUpdate'] = $updateAction;
-        }
-
-        return $fk;
+        return [
+            'on' => $this->ask("Reference table?", $tableGuess),
+            'references' => $this->ask("Reference column?", "id"),
+            'onDelete' => $this->choice("On Delete?", ['cascade', 'restrict', 'set null', 'no action'], 0),
+            'onUpdate' => $this->choice("On Update?", ['cascade', 'restrict', 'set null', 'no action'], 0),
+        ];
     }
 }
