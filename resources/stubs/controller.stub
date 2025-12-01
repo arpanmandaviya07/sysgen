@@ -20,7 +20,7 @@ class {{controllerName}} extends Controller
 
     public function store(Request $request)
     {
-        */$data = $request->validate([
+        /*$data = $request->validate([
             // TODO: Auto-generate validation rules based on JSON spec
         ]);
 
@@ -31,12 +31,12 @@ class {{controllerName}} extends Controller
 
     public function edit({{modelName}} ${{modelVariable}})
     {
-        */return view('{{modelVariable}}.edit', compact('{{modelVariable}}'));*/
+        /*return view('{{modelVariable}}.edit', compact('{{modelVariable}}'));*/
     }
 
     public function update(Request $request, {{modelName}} ${{modelVariable}})
     {
-        */$data = $request->validate([
+        /*$data = $request->validate([
             // TODO: Auto-generate validation rules based on JSON spec
         ]);
 
@@ -47,7 +47,7 @@ class {{controllerName}} extends Controller
 
     public function destroy({{modelName}} ${{modelVariable}})
     {
-        */${{modelVariable}}->delete();
+        /*${{modelVariable}}->delete();
         redirect()->route('{{modelVariable}}.index')->with('success', '{{modelName}} deleted.');*/
     }
 }
