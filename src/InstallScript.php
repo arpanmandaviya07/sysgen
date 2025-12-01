@@ -11,22 +11,22 @@ class InstallScript
         // Get project root (not using Laravel helpers)
         $projectRoot = getcwd();
 
-        // Destination folder (public folder inside project)
-        $publicPath = $projectRoot . DIRECTORY_SEPARATOR . 'public';
+// Storage path in project
+        $storagePath = $projectRoot . DIRECTORY_SEPARATOR . 'storage' . DIRECTORY_SEPARATOR . 'app' . DIRECTORY_SEPARATOR . 'public';
 
-        if (!is_dir($publicPath)) {
-            mkdir($publicPath, 0755, true);
+        if (!is_dir($storagePath)) {
+            mkdir($storagePath, 0755, true);
         }
 
-        // Source files (inside package)
+// Source files (inside package)
         $sourceSystem = __DIR__ . '/../resources/system.json';
-        $sourceCopy = __DIR__ . '/../resources/system-copy.json';
+        $sourceCopy   = __DIR__ . '/../resources/system-copy.json';
 
-        // Destination files
-        $destinationSystem = $publicPath . '/system.json';
-        $destinationCopy = $publicPath . '/system-copy.json';
+// Destination files
+        $destinationSystem = $storagePath . '/system.json';
+        $destinationCopy   = $storagePath . '/system-copy.json';
 
-        // Copy only if doesn't exist
+// Copy only if doesn't exist
         if (!file_exists($destinationSystem)) {
             copy($sourceSystem, $destinationSystem);
         }
@@ -37,7 +37,7 @@ class InstallScript
 
         echo "\n---------------------------------------\n";
         echo "📦 Laravel System Builder Installed\n";
-        echo "📁 system.json & system-copy.json published to /public\n";
+        echo "📁 system.json & system-copy.json published to /storage/app/public\n";
         echo "---------------------------------------\n\n";
     }
 }
