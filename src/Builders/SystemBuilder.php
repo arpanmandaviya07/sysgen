@@ -475,7 +475,7 @@ class SystemBuilder
         );
 
         $this->saveFileWithPrompt("$controllerPath/{$controllerName}.php", $content);
-        $this->info("   - Controller created: {$controllerName}.php");
+        $this->info("- Controller created: {$controllerName}.php");
     }
 
 
@@ -521,7 +521,7 @@ class SystemBuilder
             $content = str_replace('{{tableName}}', $tableName ?? 'N/A', $stub);
 
             $this->saveFileWithPrompt($fullPath, $content);
-            $this->info("   - View created: /resources/views/{$folder}/{$file}");
+            $this->info("- View created: /resources/views/{$folder}/{$file}");
         }
     }
 
