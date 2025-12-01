@@ -34,19 +34,118 @@ class InteractiveBuildCommand extends Command
         if (!$tables) return $this->warnExit("No tables defined. Exiting...");
 
         try {
-            $builder = new SystemBuilder(['tables' => $tables], base_path(), $this->option('force'), $module);
-            $builder->setOutput($this->output);
-            $builder->build();
+            foreach ($tables as $table) {
+                $existing = $this->migrationExists($table['name']);
 
-            $this->success("\n🎉 System generated successfully!");
-            $this->info("👉 Run: php artisan migrate");
+                if ($existing) {
+                    $choice = $this->choice(
+                        "⚠ Migration for '{$table['name']}' already exists. What do you want?",
+                        ['Skip', 'Replace'],
+                        0
+                    );
 
+                    if ($choice === 'Skip') {
+                        $this->info("⏭ Skipped: {$table['name']}");
+                        continue;
+                    }
+                }
+
+                $fileName = date('Y_m_d_His') . "_create_{$table['name']}_table.php";
+                $path = database_path("migrations/$fileName");
+
+                File::put($path, $this->generateMigrationContent($table));
+
+                $this->info("✔ Migration created: $fileName");
+                $this->info("👉 Run: php artisan migrate");
+            }
         } catch (\Exception $e) {
             $this->errorExit($e->getMessage());
         }
     }
 
     // ---------------- Helper UI Methods ----------------
+    protected function migrationExists($tableName)
+    {
+        $files = File::files(database_path('migrations'));
+
+        foreach ($files as $file) {
+            if (str_contains($file->getFilename(), $tableName)) {
+                return $file->getPathname();
+            }
+        }
+
+        return false;
+    }
+
+    protected function generateMigrationContent($table)
+    {
+        $tableName = $table['name'];
+        $columns = $table['columns'];
+
+        $schema = "";
+
+        foreach ($columns as $col) {
+            $name = $col['name'];
+            $type = $col['type'];
+
+            if ($type === 'id') {
+                $schema .= "\t\t\t\$table->id();\n";
+                continue;
+            }
+
+            if ($type === 'enum') {
+                $values = "['" . implode("','", $col['enumValues']) . "']";
+                $line = "\t\t\t\$table->enum('$name', $values)";
+            } else if ($type === 'string') {
+                $length = $col['length'] ?? 255;
+                $line = "\t\t\t\$table->string('$name', $length)";
+            } else {
+                $line = "\t\t\t\$table->$type('$name')";
+            }
+
+            if (!empty($col['nullable'])) $line .= "->nullable()";
+            if (!empty($col['unique'])) $line .= "->unique()";
+            if (!empty($col['default'])) $line .= "->default('{$col['default']}')";
+            if (!empty($col['comment'])) $line .= "->comment('{$col['comment']}')";
+
+            $schema .= "$line;\n";
+
+            if (!empty($col['foreign'])) {
+                $fk = $col['foreign'];
+                $schema .= "\t\t\t\$table->foreign('$name')"
+                    . "->references('{$fk['references']}')"
+                    . "->on('{$fk['on']}')"
+                    . "->onDelete('{$fk['onDelete']}')"
+                    . "->onUpdate('{$fk['onUpdate']}');\n";
+            }
+        }
+
+        if (!empty($table['timestamps'])) $schema .= "\t\t\t\$table->timestamps();\n";
+        if (!empty($table['softDeletes'])) $schema .= "\t\t\t\$table->softDeletes();\n";
+
+        return <<<PHP
+<?php
+
+use Illuminate\\Database\\Migrations\\Migration;
+use Illuminate\\Database\\Schema\\Blueprint;
+use Illuminate\\Support\\Facades\\Schema;
+
+return new class extends Migration {
+    public function up(): void
+    {
+        Schema::create('$tableName', function (Blueprint \$table) {
+$schema
+        });
+    }
+
+    public function down(): void
+    {
+        Schema::dropIfExists('$tableName');
+    }
+};
+PHP;
+    }
+
 
     protected function title($text)
     {
