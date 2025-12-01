@@ -131,15 +131,21 @@ class SystemBuilder
 
         // Models
         if (isset($this->definition['models'])) {
-            foreach ($this->definition['models'] as $modelName) {
-                $this->createModelFile($modelName);
+            foreach ($this->definition['models'] as $model) {
+                // $model is now an array, so extract 'name' and 'table'
+                $modelName = $model['name'] ?? null;
+                $tableName = $model['table'] ?? null;
+
+                if ($modelName) {
+                    $this->createModelFile($modelName, $tableName);
+                }
             }
         }
 
         // Controllers
         if (isset($this->definition['controllers'])) {
-            foreach ($this->definition['controllers'] as $controllerName) {
-                $this->createControllerFile($controllerName);
+            foreach ($this->definition['controllers'] as $controllerDef) {
+                $this->createControllerFile($controllerDef);
             }
         }
 
@@ -150,8 +156,6 @@ class SystemBuilder
             }
         }
     }
-
-
     protected function getModulePath(string $suffix = ''): string
     {
         if ($this->moduleName) {
