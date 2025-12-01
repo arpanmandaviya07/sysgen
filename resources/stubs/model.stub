@@ -12,5 +12,5 @@ class {{modelName}} extends Model
         {{fillable}}
     ];
 
-    {{relationships}}
+{{relationships}}
 }
