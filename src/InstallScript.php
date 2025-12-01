@@ -8,26 +8,36 @@ class InstallScript
 {
     public static function postInstall(Event $event)
     {
-        $vendorDir = $event->getComposer()->getConfig()->get('vendor-dir');
-        $targetPath = base_path("public/system.json");
-        $targetCopyPath = base_path("public/system-copy.json");
+        // Get project root (not using Laravel helpers)
+        $projectRoot = getcwd();
 
-        $source = __DIR__ . '/../resources/system.json';
+        // Destination folder (public folder inside project)
+        $publicPath = $projectRoot . DIRECTORY_SEPARATOR . 'public';
+
+        if (!is_dir($publicPath)) {
+            mkdir($publicPath, 0755, true);
+        }
+
+        // Source files (inside package)
+        $sourceSystem = __DIR__ . '/../resources/system.json';
         $sourceCopy = __DIR__ . '/../resources/system-copy.json';
 
-        // Ensure public folder exists
-        if (!is_dir(dirname($targetPath))) {
-            mkdir(dirname($targetPath), 0755, true);
+        // Destination files
+        $destinationSystem = $publicPath . '/system.json';
+        $destinationCopy = $publicPath . '/system-copy.json';
+
+        // Copy only if doesn't exist
+        if (!file_exists($destinationSystem)) {
+            copy($sourceSystem, $destinationSystem);
         }
 
-        if (!file_exists($targetPath)) {
-            copy($source, $targetPath);
+        if (!file_exists($destinationCopy)) {
+            copy($sourceCopy, $destinationCopy);
         }
 
-        if (!file_exists($targetCopyPath)) {
-            copy($sourceCopy, $targetCopyPath);
-        }
-
-        echo "\n📁 system.json and system-copy.json published successfully.\n";
+        echo "\n---------------------------------------\n";
+        echo "📦 Laravel System Builder Installed\n";
+        echo "📁 system.json & system-copy.json published to /public\n";
+        echo "---------------------------------------\n\n";
     }
 }
