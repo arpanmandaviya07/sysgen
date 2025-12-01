@@ -44,10 +44,14 @@ class InteractiveBuildCommand extends Command
                         0
                     );
 
-                    if ($choice === 'Skip') {
+                    if ($choice === 'Replace') {
+                        File::delete($existing);
+                        $this->info("🔄 Replaced existing migration: {$table['name']}");
+                    } else {
                         $this->info("⏭ Skipped: {$table['name']}");
                         continue;
                     }
+
                 }
 
                 $fileName = date('Y_m_d_His') . "_create_{$table['name']}_table.php";
