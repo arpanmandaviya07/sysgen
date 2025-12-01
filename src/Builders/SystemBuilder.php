@@ -10,14 +10,14 @@ class SystemBuilder
 {
     use InteractsWithIO;
 
-    protected array $definition;
-    protected string $basePath;
+    protected array      $definition;
+    protected string     $basePath;
     protected Filesystem $files;
-    protected bool $force = false;
-    protected ?string $moduleName = null;
+    protected bool       $force      = false;
+    protected ?string    $moduleName = null;
 
-    protected bool $overwriteAll = false;
-    protected bool $skipAll = false;
+    protected bool  $overwriteAll  = false;
+    protected bool  $skipAll       = false;
     protected array $createdTables = [];
 
     protected $output;
@@ -54,11 +54,11 @@ class SystemBuilder
                 foreach ($chunks as $rule) {
                     if (str_starts_with($rule, 'len(')) {
                         $col['length'] = (int)preg_replace('/[^0-9]/', '', $rule);
-                    } elseif ($rule === 'unique') {
+                    } else if ($rule === 'unique') {
                         $col['unique'] = true;
-                    } elseif ($rule === 'nullable') {
+                    } else if ($rule === 'nullable') {
                         $col['nullable'] = true;
-                    } elseif (str_starts_with($rule, 'rel(')) {
+                    } else if (str_starts_with($rule, 'rel(')) {
                         preg_match('/rel\((.*?),(.*?),(.*?)\)/', $rule, $r);
                         $col['foreign'] = [
                             'on' => trim($r[1]),
@@ -277,7 +277,7 @@ class SystemBuilder
 
                 if (strtolower($choice) === 'json') {
                     $controllerToGenerate = $userController;
-                } elseif (strtolower($choice) === 'both') {
+                } else if (strtolower($choice) === 'both') {
                     $createBoth = true;
                 }
                 // else: controllerToGenerate remains tableBasedName
@@ -348,14 +348,12 @@ class SystemBuilder
             $folder = trim($matches[1], '/');
             $files = array_map('trim', explode(',', $matches[2]));
             $filesToCreate = array_map(fn($f) => $f . '.blade.php', $files);
-        }
-        // Try to parse format: folder/filename (treat filename as index if no brackets)
-        elseif (strpos($line, '/') !== false) {
+        } // Try to parse format: folder/filename (treat filename as index if no brackets)
+        else if (strpos($line, '/') !== false) {
             $parts = explode('/', trim($line, '/'));
             $folder = $parts[0];
             $filesToCreate = [end($parts) . '.blade.php'];
-        }
-        // Simple file case: index or file.blade.php
+        } // Simple file case: index or file.blade.php
         else {
             $filesToCreate = [Str::endsWith($line, '.blade.php') ? $line : $line . '.blade.php'];
             $folder = $tableName ?? 'default';
@@ -409,52 +407,44 @@ class SystemBuilder
 
         foreach ($columns as $col) {
 
-            if (in_array($col['name'], $existingCols)) {
-                $this->warn("⛔ Skipping duplicate column: {$col['name']}");
-                continue;
-            }
-
+            if (in_array($col['name'], $existingCols)) continue;
             $existingCols[] = $col['name'];
 
+            // Skip auto-increment IDs (handled separately)
             if (isset($col['type']) && in_array($col['type'], ['id', 'bigIncrements', 'increments'])) {
-                if ($col['type'] === 'id') {
-                    $lines .= " \$table->id();\n";
-                }
+                if ($col['type'] === 'id') $lines .= "            \$table->id();\n";
                 continue;
             }
 
-            $type = $col['type'] ?? 'string';
             $name = $col['name'];
+            $type = $col['type'] ?? 'string';
 
-            $base = "\$table->{$type}('{$name}'";
-
-            if (!empty($col['length']) && in_array($type, ['string', 'char', 'varchar'])) {
-                $base .= ", {$col['length']}";
-            }
-
-            if ($type === 'enum' && !empty($col['values']) && is_array($col['values'])) {
-                $vals = array_map(fn($v) => "'" . addslashes($v) . "'", $col['values']);
-                $base = "\$table->enum('{$name}', [" . implode(', ', $vals) . "])";
+            // ENUM handling
+            if ($type === 'enum' && !empty($col['values'])) {
+                $vals = implode(", ", array_map(fn($v) => "'$v'", $col['values']));
+                $line = "            \$table->enum('$name', [$vals])";
             } else {
-                $base .= ")";
+                $length = $col['length'] ?? null;
+                $line = $length ? "            \$table->$type('$name', $length)" : "            \$table->$type('$name')";
             }
 
-            if (!empty($col['nullable'])) $base .= "->nullable()";
-            if (!empty($col['unique'])) $base .= "->unique()";
-            if (!empty($col['index'])) $base .= "->index()";
+            if (!empty($col['nullable'])) $line .= "->nullable()";
+            if (!empty($col['unique'])) $line .= "->unique()";
+            if (!empty($col['index'])) $line .= "->index()";
 
             if (isset($col['default'])) {
-                $default = is_numeric($col['default']) ? $col['default'] : "'" . addslashes($col['default']) . "'";
-                $base .= "->default({$default})";
+                $default = is_numeric($col['default']) ? $col['default'] : "'{$col['default']}'";
+                $line .= "->default($default)";
             }
 
-            if (!empty($col['comment'])) $base .= "->comment('" . addslashes($col['comment']) . "')";
+            if (!empty($col['comment'])) $line .= "->comment('{$col['comment']}')";
 
-            $lines .= " $base;\n";
+            $lines .= $line . ";\n";
         }
 
         return $lines;
     }
+
 
     protected function generateForeignKeys(array $columns): string
     {
@@ -463,20 +453,40 @@ class SystemBuilder
         foreach ($columns as $col) {
             if (!empty($col['foreign'])) {
                 $fk = $col['foreign'];
-                $columnName = $col['name'];
+                $colName = $col['name'];
                 $on = $fk['on'] ?? null;
                 $ref = $fk['references'] ?? 'id';
 
                 if ($on) {
-                    $lines .= " \$table->foreign('{$columnName}')->references('{$ref}')->on('{$on}')";
-                    if (!empty($fk['onDelete'])) $lines .= "->onDelete('{$fk['onDelete']}')";
-                    if (!empty($fk['onUpdate'])) $lines .= "->onUpdate('{$fk['onUpdate']}')";
-                    $lines .= ";\n";
+                    $line = "            \$table->foreign('$colName')->references('$ref')->on('$on')";
+                    if (!empty($fk['onDelete'])) $line .= "->onDelete('{$fk['onDelete']}')";
+                    if (!empty($fk['onUpdate'])) $line .= "->onUpdate('{$fk['onUpdate']}')";
+                    $lines .= $line . ";\n";
                 }
             }
         }
+
         return $lines;
     }
+
+    protected function generateTimestamps(array $columns): string
+    {
+        $hasCreated = collect($columns)->pluck('name')->contains('created_at');
+        $hasUpdated = collect($columns)->pluck('name')->contains('updated_at');
+
+        $lines = '';
+
+        if (!$hasCreated && !$hasUpdated) {
+            $lines .= "            \$table->timestamps();\n";
+        }
+
+        if (collect($columns)->pluck('name')->contains('deleted_at')) {
+            $lines .= "            \$table->softDeletes();\n";
+        }
+
+        return $lines;
+    }
+
 
     protected function askPermission(string $message): bool
     {

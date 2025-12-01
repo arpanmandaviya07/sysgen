@@ -11,7 +11,7 @@ return new class extends Migration {
             $table->id();
 {{columns}}
 {{foreign_keys}}
-            {{timestamps}}
+            $this->generateTimestamps($table['columns'] ?? [])
         });
     }
 
