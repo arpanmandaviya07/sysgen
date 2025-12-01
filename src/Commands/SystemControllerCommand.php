@@ -14,7 +14,7 @@ system:controller
     {name : Name of the controller (Example: UserController, InvoiceController)}
     {--resource : Create a full Laravel resource controller}
     {--force : Overwrite existing controller if it exists}
-    {--help : Display this help menu}
+   
 SIGNATURE;
 
     protected $description = 'Generate a controller with optional resource structure.';

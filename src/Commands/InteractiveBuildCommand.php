@@ -11,7 +11,6 @@ class InteractiveBuildCommand extends Command
     protected $signature = 'system:migrate
                         {--module= : The name of the module or folder (Example: Blog)}
                         {--force : Overwrite existing files without confirmation}
-                        {--help : View detailed usage instructions}
                         ';
 
     protected $description = '⚡ Interactive mode to generate Migrations, Models, Controllers and Views with relationships.';

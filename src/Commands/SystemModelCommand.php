@@ -10,10 +10,9 @@ use Arpanmandaviya\SystemBuilder\Builders\SystemBuilder;
 
 class SystemModelCommand extends Command
 {
-    protected $signature = 'system:model
+    protected $signature = 'system:model {name?} 
                             {name : Model name (e.g., User, Invoice)}
-                            {--force : Overwrite existing model if exists}
-                            {--help : View detailed usage instructions}';
+                            {--force : Overwrite existing model if exists}';
 
     protected $description = 'Generate a model with optional table mapping, fields, and relationships.';
 
