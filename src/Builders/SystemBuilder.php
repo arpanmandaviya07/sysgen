@@ -204,8 +204,15 @@ class SystemBuilder
         return $this->getModulePath('/Http/Controllers');
     }
 
+    // In Arpanmandaviya\SystemBuilder\Builders\SystemBuilder
+
     protected function generateMigration(array $table, int $index): void
     {
+        $tableName = $table['name'];
+        if (!$tableName) {
+            throw new \Exception("Table name missing. Check your JSON definition!");
+        }
+
         $migrationPath = $this->migrationPath();
         if (!$this->files->isDirectory($migrationPath)) {
             $this->files->makeDirectory($migrationPath, 0755, true);
@@ -223,25 +230,37 @@ class SystemBuilder
         }
 
         $content = str_replace(['{{tableName}}', '{{columns}}', '{{foreign_keys}}', '{{timestamps}}'], [
-            $table['name'],
+            $tableName,
             $columnsCode,
             $fkCode,
             $timestampsCode,
         ], $stub);
 
-        // --- Custom logic to ensure unique, sequential timestamp (Step 1 of fix)
-        $timestamp = Carbon::now()->addSeconds($index)->format('Y_m_d_His');
-        // --- End of Custom logic
+        $searchPattern = $migrationPath . '/*_create_' . $tableName . '_table.php';
+        $existingFiles = glob($searchPattern);
 
-        $fileName = "{$timestamp}_create_{$table['name']}_table.php";
-        $fullPath = $migrationPath . '/' . $fileName;
+        $fullPath = null;
+        $fileName = '';
 
-        if (!$table['name']) {
-            throw new \Exception("Table name missing. Check your JSON definition!");
+        if (!empty($existingFiles)) {
+            $fullPath = $existingFiles[0];
+            $fileName = basename($fullPath);
+
+            if (!$this->force && !$this->askPermission("Migration for table '{$tableName}' already exists: {$fileName}. Overwrite?")) {
+                $this->info("⏩ Skipped migration creation for '{$tableName}'.");
+                return;
+            }
+
+        } else {
+            $timestamp = Carbon::now()->addSeconds($index)->format('Y_m_d_His');
+
+
+            $fileName = "{$timestamp}_create_{$tableName}_table.php";
+            $fullPath = $migrationPath . '/' . $fileName;
         }
 
         $this->saveFileWithPrompt($fullPath, $content);
-        $this->info("- Migration created: {$fileName}");
+        $this->info("- Migration created/updated: {$fileName}");
     }
 
     protected function generateModel(array $table): void
@@ -457,7 +476,6 @@ class SystemBuilder
     {
         $line = trim($viewDefinition);
         $filesToCreate = [];
-
         $folder = null;
 
         if (preg_match('/(.*?)\/\[(.*?)\]/', $line, $matches)) {
@@ -475,14 +493,40 @@ class SystemBuilder
 
         $basePath = $this->basePath . '/resources/views/' . $folder;
 
+        // Ask once per view type
+        // Ask user for layout type (0 = Normal, 1 = Bootstrap5)
+        $layoutChoice = $this->ask(
+            "Choose layout type:\n[0] Normal HTML (default)\n[1] Bootstrap 5\nEnter option:",
+            0 // default
+        );
+
+        $layoutChoice = (int)$layoutChoice;
+
+        if (!in_array($layoutChoice, [0, 1])) {
+            $this->warn("Invalid choice! Using default layout: Normal HTML.");
+            $layoutChoice = 0;
+        }
+
+        $stubFile = $layoutChoice === 1
+            ? __DIR__ . '/../../resources/stubs/view_bootstrap.stub'
+            : __DIR__ . '/../../resources/stubs/view_plain.stub';
+
         foreach ($filesToCreate as $file) {
             $fullPath = $basePath . '/' . $file;
             $dir = dirname($fullPath);
 
-            if (!$this->files->isDirectory($dir)) $this->files->makeDirectory($dir, 0755, true);
+            if (!$this->files->isDirectory($dir)) {
+                $this->files->makeDirectory($dir, 0755, true);
+            }
 
-            $stub = $this->files->get(__DIR__ . '/../../resources/stubs/view.stub');
-            $content = str_replace('{{tableName}}', $tableName ?? 'N/A', $stub);
+            $viewTitle = ucfirst(str_replace('.blade.php', '', $file));
+
+            $stub = $this->files->get($stubFile);
+            $content = str_replace(
+                ['{{tableName}}', '{{title}}', '{{heading}}'],
+                [$tableName ?? 'N/A', $viewTitle, $viewTitle],
+                $stub
+            );
 
             $this->saveFileWithPrompt($fullPath, $content);
             $this->info("- View created: /resources/views/{$folder}/{$file}");
@@ -604,7 +648,7 @@ class SystemBuilder
 
         $answer = $this->ask("⚠️$message (y/n/all/skip-all)", 'n');
 
-        if ($answer === 'all') {
+        if ($answer === 'all-replace') {
             $this->overwriteAll = true;
             return true;
         }

@@ -4,6 +4,7 @@ namespace Arpanmandaviya\SystemBuilder;
 
 use Arpanmandaviya\SystemBuilder\Commands\SystemControllerCommand;
 use Arpanmandaviya\SystemBuilder\Commands\SystemModelCommand;
+use Arpanmandaviya\SystemBuilder\Commands\SystemViewCommand;
 use Illuminate\Support\ServiceProvider;
 use Arpanmandaviya\SystemBuilder\Commands\BuildSystemCommand;
 use Arpanmandaviya\SystemBuilder\Commands\InteractiveBuildCommand;
@@ -23,6 +24,7 @@ class SystemBuilderServiceProvider extends ServiceProvider
                 InteractiveBuildCommand::class,
                 SystemControllerCommand::class,
                 SystemModelCommand::class,
+                SystemViewCommand::class,
             ]);
         }
     }

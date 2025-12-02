@@ -1,7 +1,7 @@
-content = """
-===========================
+
+
 🚀 Laravel System Builder
-===========================
+--------------------------------
 
 A professional Laravel package that lets you generate complete application scaffolding including:
 
@@ -18,7 +18,7 @@ All automatically — powered by a single JSON file.
 
 Install the package using Composer:
 
-    composer require arpan/laravel-system-builder
+    composer require arpanmandaviya/laravel-system-builder
 
 Place a JSON definition file anywhere in your Laravel project, for example:
 
@@ -35,6 +35,9 @@ Run the build command:
 To overwrite existing files:
 
     php artisan system:build --json=storage/app/system.json --force
+
+Note: Gave the Path of The File In The Command Otherwise it Show Error For More Information Please Use 
+```Help``` Command
 
 --------------------------------
 📁 Example JSON Structure
