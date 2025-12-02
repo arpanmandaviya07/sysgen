@@ -25,10 +25,16 @@ class SystemViewCommand extends Command
         $input = $this->argument('name') ?: $this->ask("Enter view name (Example: dashboard or admin/pages/[home,edit,create])");
 
         $input = trim($input);
-
-        // Detect batch mode: example admin/view/[hello,hyy,howareyou]
-        if (Str::contains($input, ['[', ']'])) {
+        if (Str::contains($input, ',')) {
+            if (!Str::contains($input, ['[', ']'])) {
+                $folder = Str::contains($input, '/') ? Str::beforeLast($input, '/') : '';
+                $list   = Str::afterLast($input, '/');
+                $input  = $folder !== ''
+                    ? "{$folder}/[{$list}]"
+                    : "[{$list}]";
+            }
             $this->processMultipleViews($input);
+
         } else {
             $this->processSingleView($input);
         }
