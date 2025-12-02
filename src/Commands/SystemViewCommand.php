@@ -21,8 +21,8 @@ class SystemViewCommand extends Command
     public function handle()
     {
         $input = $this->argument('name') ?: $this->ask("Enter view name (Example: dashboard or admin/pages/[home,edit,create])");
-
         $input = trim($input);
+
         if (Str::contains($input, ',')) {
             if (!Str::contains($input, ['[', ']'])) {
                 $folder = Str::contains($input, '/') ? Str::beforeLast($input, '/') : '';
@@ -48,18 +48,20 @@ class SystemViewCommand extends Command
             return preg_replace('/[^a-zA-Z0-9_-]/', '', $name);
         }, $names);
 
+        // Layout choice
         $layoutChoice = $this->choice(
             "Choose template for ALL views",
             ['0 = Normal HTML (default)', '1 = Bootstrap 5 Layout'],
             0
         );
-
         $isBootstrap = Str::contains($layoutChoice, '1');
 
         foreach ($names as $viewName) {
             $fileName = $this->normalizeFileName($viewName);
             $path = resource_path("views/{$folder}/{$fileName}");
-            $this->generateView($path, $fileName, $isBootstrap);
+            $content = $this->askPageTypeAndGenerate($fileName, $isBootstrap);
+            $this->files->ensureDirectoryExists(dirname($path));
+            $this->files->put($path, $content);
         }
 
         $this->info("🎉 All view files created in: resources/views/{$folder}/");
@@ -67,7 +69,7 @@ class SystemViewCommand extends Command
 
     private function processSingleView($name)
     {
-        // Check typo for single view
+        // Check typo
         if (Str::contains($name, ['dashbaord', 'dasboard', 'usr'])) {
             if (!$this->confirm("⚠ The name '$name' looks misspelled. Continue?", false)) {
                 $name = $this->ask("Enter corrected name:");
@@ -79,7 +81,7 @@ class SystemViewCommand extends Command
         $fileName = $this->normalizeFileName($name);
         $path = resource_path("views/{$fileName}");
 
-        // Step 1: Layout choice
+        // Layout choice
         $layoutChoice = $this->choice(
             "Choose view template type",
             ['0 = Normal HTML (default)', '1 = Bootstrap 5 Layout'],
@@ -87,34 +89,33 @@ class SystemViewCommand extends Command
         );
         $isBootstrap = Str::contains($layoutChoice, '1');
 
-        // Step 2: Page content type
+        // Generate content
+        $content = $this->askPageTypeAndGenerate($fileName, $isBootstrap);
+
+        // Save file
+        $this->files->ensureDirectoryExists(dirname($path));
+        $this->files->put($path, $content);
+        $this->info("✅ View created: resources/views/{$fileName}");
+    }
+
+    private function askPageTypeAndGenerate($fileName, $isBootstrap)
+    {
         $pageOption = $this->choice(
             "Select page type",
             ['0 = Blank Page', '1 = Table', '2 = Cards', '3 = Form'],
             0
         );
 
-        // Step 3: Generate content based on type
-        $content = '';
         switch ($pageOption) {
             case 1: // Table
-                $content = $this->generateTable($fileName, $isBootstrap);
-                break;
+                return $this->generateTable($fileName, $isBootstrap);
             case 2: // Cards
-                $content = $this->generateCards($fileName, $isBootstrap);
-                break;
+                return $this->generateCards($fileName, $isBootstrap);
             case 3: // Form
-                $content = $this->generateForm($fileName, $isBootstrap);
-                break;
-            default:
-                $content = $isBootstrap ? $this->bootstrapTemplate($fileName) : $this->simpleTemplate($fileName);
-                break;
+                return $this->generateForm($fileName, $isBootstrap);
+            default: // Blank
+                return $isBootstrap ? $this->bootstrapTemplate($fileName) : $this->simpleTemplate($fileName);
         }
-
-        // Create directories if needed
-        $this->files->ensureDirectoryExists(dirname($path));
-        $this->files->put($path, $content);
-        $this->info("✅ View created: resources/views/{$fileName}");
     }
 
     private function normalizeFileName($name)
@@ -126,14 +127,7 @@ class SystemViewCommand extends Command
         return $name;
     }
 
-    private function generateView($path, $name, $isBootstrap)
-    {
-        $this->files->ensureDirectoryExists(dirname($path));
-        $content = $isBootstrap ? $this->bootstrapTemplate($name) : $this->simpleTemplate($name);
-        $this->files->put($path, $content);
-    }
-
-    // -------------------- Page Generators --------------------
+    // -------------------- Generators --------------------
 
     private function generateTable($name, $isBootstrap)
     {
@@ -145,12 +139,10 @@ class SystemViewCommand extends Command
 
         if ($tableOption == 1) {
             $varName = $this->ask("Enter foreach variable name (example: users, products)");
-            $content = $this->tableForeachTemplate($name, $varName, $isBootstrap);
+            return $this->tableForeachTemplate($name, $varName, $isBootstrap);
         } else {
-            $content = $this->dummyTableTemplate($name, $isBootstrap);
+            return $this->dummyTableTemplate($name, $isBootstrap);
         }
-
-        return $content;
     }
 
     private function generateCards($name, $isBootstrap)
@@ -163,12 +155,10 @@ class SystemViewCommand extends Command
 
         if ($cardOption == 1) {
             $varName = $this->ask("Enter foreach variable name (example: products, posts)");
-            $content = $this->cardsForeachTemplate($name, $varName, $isBootstrap);
+            return $this->cardsForeachTemplate($name, $varName, $isBootstrap);
         } else {
-            $content = $this->dummyCardsTemplate($name, $isBootstrap);
+            return $this->dummyCardsTemplate($name, $isBootstrap);
         }
-
-        return $content;
     }
 
     private function generateForm($name, $isBootstrap)
@@ -181,13 +171,13 @@ class SystemViewCommand extends Command
 
         $fields = [];
         switch ($formOption) {
-            case 0: // Login
+            case 0:
                 $fields = ['email', 'password'];
                 break;
-            case 1: // Registration
+            case 1:
                 $fields = ['fullname', 'mobileno', 'age', 'email', 'password', 'confirm-password'];
                 break;
-            case 2: // Custom
+            case 2:
                 $fieldInput = $this->ask("Enter comma-separated field names (example: name,email,age)");
                 $fields = array_map('trim', explode(',', $fieldInput));
                 break;
@@ -241,7 +231,7 @@ HTML;
 HTML;
     }
 
-    // -------------------- Table Templates --------------------
+    // -------------------- Table --------------------
 
     private function dummyTableTemplate($name, $isBootstrap)
     {
@@ -312,7 +302,7 @@ HTML;
 HTML;
     }
 
-    // -------------------- Cards Templates --------------------
+    // -------------------- Cards --------------------
 
     private function dummyCardsTemplate($name, $isBootstrap)
     {
@@ -358,17 +348,14 @@ HTML;
 HTML;
     }
 
-    // -------------------- Form Template --------------------
+    // -------------------- Form --------------------
 
     private function formTemplate($name, $fields, $isBootstrap)
     {
         $title = ucwords(str_replace(['-', '_', '.blade.php'], ' ', $name));
         $formClass = $isBootstrap ? 'class="container mt-5 w-50"' : '';
         $inputClass = $isBootstrap ? 'class="form-control mb-3"' : '';
-
-        $bootstrapLink = $isBootstrap
-            ? '<link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">'
-            : '';
+        $bootstrapLink = $isBootstrap ? '<link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">' : '';
 
         $inputs = '';
         foreach ($fields as $field) {
@@ -401,5 +388,4 @@ HTML;
 </html>
 HTML;
     }
-
 }
