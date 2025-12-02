@@ -366,6 +366,10 @@ HTML;
         $formClass = $isBootstrap ? 'class="container mt-5 w-50"' : '';
         $inputClass = $isBootstrap ? 'class="form-control mb-3"' : '';
 
+        $bootstrapLink = $isBootstrap
+            ? '<link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">'
+            : '';
+
         $inputs = '';
         foreach ($fields as $field) {
             $label = ucwords(str_replace('-', ' ', $field));
@@ -382,7 +386,7 @@ HTML;
 <html>
 <head>
     <title>{$title}</title>
-    {$isBootstrap ? '<link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">' : ''}
+    {$bootstrapLink}
 </head>
 <body>
 <div {$formClass}>
@@ -397,4 +401,5 @@ HTML;
 </html>
 HTML;
     }
+
 }
