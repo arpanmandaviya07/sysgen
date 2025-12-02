@@ -8,9 +8,9 @@ use Illuminate\Support\Str;
 
 class SystemViewCommand extends Command
 {
-    protected $signature = 'system:view {name? : Name of the view file}';
+    protected $signature = 'system:view {name? : Name of the view file(s)}';
 
-    protected $description = 'Generate a new Blade view with optional Bootstrap layout.';
+    protected $description = 'Generate one or multiple Blade views with optional Bootstrap layout.';
 
     protected $files;
 
@@ -22,35 +22,66 @@ class SystemViewCommand extends Command
 
     public function handle()
     {
-        // Step 1: Get view name
-        $name = $this->argument('name') ?: $this->ask("Enter view name (Example: dashboard, user-profile)");
+        $input = $this->argument('name') ?: $this->ask("Enter view name (Example: dashboard or admin/pages/[home,edit,create])");
 
-        // Step 2: Clean input
-        $name = strtolower(trim($name));
+        $input = trim($input);
 
-        // Step 3: Confirm if name contains potential mistakes
+        // Detect batch mode: example admin/view/[hello,hyy,howareyou]
+        if (Str::contains($input, ['[', ']'])) {
+            $this->processMultipleViews($input);
+        } else {
+            $this->processSingleView($input);
+        }
+    }
+
+    private function processMultipleViews($input)
+    {
+        $folder = Str::before($input, '[');
+        $folder = trim($folder, "/ ");
+
+        $rawNames = Str::between($input, '[', ']');
+        $names = array_map('trim', explode(',', $rawNames));
+
+        // Filter invalid characters
+        $names = array_map(function ($name) {
+            return preg_replace('/[^a-zA-Z0-9_-]/', '', $name);
+        }, $names);
+
+        $layoutChoice = $this->choice(
+            "Choose template for ALL views",
+            ['0 = Normal HTML (default)', '1 = Bootstrap 5 Layout'],
+            0
+        );
+
+        $isBootstrap = Str::contains($layoutChoice, '1');
+
+        foreach ($names as $viewName) {
+            $fileName = $this->normalizeFileName($viewName);
+
+            $path = resource_path("views/{$folder}/{$fileName}");
+
+            $this->generateView($path, $fileName, $isBootstrap);
+        }
+
+        $this->info("🎉 All view files created in: resources/views/{$folder}/");
+    }
+
+    private function processSingleView($name)
+    {
+        // Check typo only for single file mode
         if (Str::contains($name, ['dashbaord', 'dasboard', 'usr'])) {
-            if (!$this->confirm("⚠️ The name '{$name}' looks misspelled. Continue?", false)) {
+            if (!$this->confirm("⚠ The name '$name' looks misspelled. Continue?", false)) {
                 $name = $this->ask("Enter corrected name:");
             }
         }
 
-        // Step 4: Ensure .blade.php suffix
-        if (!Str::endsWith($name, '.blade.php')) {
-            $name .= '.blade.php';
-        }
+        // Clean invalid characters
+        $name = preg_replace('/[^a-zA-Z0-9\/_-]/', '', $name);
 
-        // Step 5: Prepare full path
-        $path = resource_path("views/{$name}");
+        $fileName = $this->normalizeFileName($name);
 
-        // Step 6: If file exists
-        if ($this->files->exists($path)) {
-            if (!$this->confirm("⚠ View already exists. Overwrite?", false)) {
-                return $this->warn("❌ Operation cancelled.");
-            }
-        }
+        $path = resource_path("views/{$fileName}");
 
-        // Step 7: Ask layout preference
         $layoutChoice = $this->choice(
             "Choose view template type",
             ['0 = Normal HTML (default)', '1 = Bootstrap 5 Layout'],
@@ -59,16 +90,29 @@ class SystemViewCommand extends Command
 
         $isBootstrap = Str::contains($layoutChoice, '1');
 
-        // Step 8: Get template content
-        $content = $isBootstrap ? $this->bootstrapTemplate($name) : $this->simpleTemplate($name);
+        $this->generateView($path, $fileName, $isBootstrap);
 
-        // Step 9: Create directories if needed
+        $this->info("✅ View created: resources/views/{$fileName}");
+    }
+
+    private function normalizeFileName($name)
+    {
+        $name = trim($name, "/ ");
+
+        if (!Str::endsWith($name, '.blade.php')) {
+            $name .= '.blade.php';
+        }
+
+        return $name;
+    }
+
+    private function generateView($path, $name, $bootstrap)
+    {
         $this->files->ensureDirectoryExists(dirname($path));
 
-        // Step 10: Write file
-        $this->files->put($path, $content);
+        $content = $bootstrap ? $this->bootstrapTemplate($name) : $this->simpleTemplate($name);
 
-        $this->info("✅ View created: resources/views/{$name}");
+        $this->files->put($path, $content);
     }
 
     protected function simpleTemplate($name)
@@ -109,14 +153,13 @@ HTML;
 
 <body class="bg-light">
 
-<div class="container d-flex justify-content-center align-items-center" style="height: 100vh;">
+<div class="container d-flex justify-content-center align-items-center vh-100">
     <div class="text-center">
         <h1 class="fw-bold text-primary">{$title}</h1>
-        <p class="lead text-muted">This view is generated using Laravel System Builder (Bootstrap 5 Layout).</p>
+        <p class="lead text-muted">Generated using Laravel System Builder (Bootstrap 5 Layout).</p>
     </div>
 </div>
 
-<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
 </body>
 </html>
 HTML;
